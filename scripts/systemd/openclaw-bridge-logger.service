@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenClaw Bridge Logger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+EnvironmentFile=-/etc/clawd/template.env
+ExecStartPre=/usr/bin/node --check %h/.openclaw/bridge-logger.js
+ExecStart=/usr/bin/node %h/.openclaw/bridge-logger.js
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/.openclaw/bridge-logger.out
+StandardError=append:%h/.openclaw/bridge-logger.err
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

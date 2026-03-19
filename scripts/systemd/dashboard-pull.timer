@@ -1,0 +1,11 @@
+[Unit]
+Description=Run dashboard pull on schedule
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=@@UPDATE_INTERVAL@@
+Persistent=true
+Unit=dashboard-pull.service
+
+[Install]
+WantedBy=timers.target
