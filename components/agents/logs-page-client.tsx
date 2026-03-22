@@ -21,7 +21,7 @@ type Props = {
   initialNowIso: string;
 };
 
-export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo }: Props) {
+export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, initialNowIso }: Props) {
   const [agents] = useState<Agent[]>(initialAgents);
   const [logs, setLogs] = useState<AgentLog[]>(initialLogs);
   const [pageInfo, setPageInfo] = useState<PageInfo>(initialPageInfo);
