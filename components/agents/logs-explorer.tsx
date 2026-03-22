@@ -158,6 +158,29 @@ function summarizeGatewayLogObject(value: unknown): string {
   return "";
 }
 
+function summarizePathListingText(text: string): string {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const pathLines = lines.filter((l) => l.startsWith("./") || l.startsWith("/"));
+  if (pathLines.length < 20) return "";
+
+  const nodeModules = pathLines.filter((l) => l.includes("/node_modules/")).length;
+  const gitMeta = pathLines.filter((l) => l.includes("/.git/")).length;
+  const supabase = pathLines.filter((l) => l.includes("/supabase/")).length;
+
+  const parts = [
+    `${pathLines.length} paths`,
+    nodeModules ? `${nodeModules} node_modules` : "",
+    gitMeta ? `${gitMeta} .git` : "",
+    supabase ? `${supabase} supabase` : "",
+  ].filter(Boolean);
+
+  return `Filesystem listing: ${parts.join(" • ")}`;
+}
+
 function summarizeGitStatusText(text: string): string {
   const lines = String(text || "")
     .split(/\r?\n/)
@@ -252,6 +275,8 @@ function humanizePreview(message: string, payload: unknown): string {
 
         // Tool results are often huge JSON arrays/objects; summarize them.
         if (role.includes("tool")) {
+          const listingSummary = summarizePathListingText(rawText);
+          if (listingSummary) return listingSummary;
           const gitSummary = summarizeGitStatusText(rawText);
           if (gitSummary) return gitSummary;
           const toolSummary = summarizeToolJsonText(rawText);
@@ -269,6 +294,15 @@ function humanizePreview(message: string, payload: unknown): string {
     } catch {
       // keep raw message path
     }
+
+    const listingSummary = summarizePathListingText(msg);
+    if (listingSummary) return listingSummary;
+
+    const gitSummary = summarizeGitStatusText(msg);
+    if (gitSummary) return gitSummary;
+
+    const toolSummary = summarizeToolJsonText(msg);
+    if (toolSummary) return toolSummary;
 
     const extracted = extractVisibleMessageFromEnvelope(msg);
     const compact = (extracted || msg).replace(/\s+/g, " ").trim();
@@ -299,6 +333,8 @@ function humanizePreview(message: string, payload: unknown): string {
       const rawText = safeString(nestedContent[0]?.text || nestedContent[0]?.message);
 
       if (nestedRole.includes("tool")) {
+        const listingSummary = summarizePathListingText(rawText);
+        if (listingSummary) return listingSummary;
         const gitSummary = summarizeGitStatusText(rawText);
         if (gitSummary) return gitSummary;
         const toolSummary = summarizeToolJsonText(rawText);
