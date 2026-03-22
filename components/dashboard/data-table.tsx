@@ -48,7 +48,7 @@ import {
 import { toast } from "sonner"
 
 import { useIsMobile } from "@/hooks/use-mobile"
-import { ASSIGNEES, formatDue, type Ticket } from "@/types/tasks"
+import { formatDue, type Assignee, type Ticket } from "@/types/tasks"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -88,7 +88,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-const assigneeById = Object.fromEntries(ASSIGNEES.map((a) => [a.id, a]))
 
 const STATUS_LABELS: Record<string, string> = {
   backlog: "Backlog",
@@ -113,6 +112,7 @@ const STATUS_DOT_CLASS: Record<string, string> = {
 
 type DashboardTableMeta = {
   onEditTicket: (ticketId: string) => void
+  assignees: Assignee[]
 }
 
 function DragHandle({ id }: { id: string }) {
@@ -212,13 +212,15 @@ const columns: ColumnDef<Ticket>[] = [
   {
     accessorKey: "assigneeIds",
     header: "Assignees",
-    cell: ({ row }) => {
+    cell: ({ row, table }) => {
       const ids = row.original.assigneeIds
       if (ids.length === 0)
         return <span className="text-xs text-muted-foreground">-</span>
+      const meta = table.options.meta as DashboardTableMeta | undefined
+      const assigneeById = Object.fromEntries((meta?.assignees ?? []).map((a) => [a.id, a]))
       const knownAssignees = ids
         .map((id) => ({ id, assignee: assigneeById[id] }))
-        .filter((item): item is { id: string; assignee: (typeof ASSIGNEES)[number] } =>
+        .filter((item): item is { id: string; assignee: Assignee } =>
           Boolean(item.assignee),
         )
       if (knownAssignees.length === 0) {
@@ -376,6 +378,7 @@ export function DataTable({
     columns,
     meta: {
       onEditTicket: handleEditTicket,
+      assignees: [],
     } satisfies DashboardTableMeta,
     state: { sorting, columnVisibility, rowSelection, columnFilters, pagination },
     getRowId: (row) => row.id,
@@ -585,23 +588,16 @@ function TableCellViewer({ item }: { item: Ticket }) {
             <div className="flex flex-col gap-1.5">
               <Label>Assignees</Label>
               <div className="flex flex-wrap gap-2">
-                {item.assigneeIds.map((id) => {
-                  const a = assigneeById[id]
-                  if (!a) return null
-                  return (
-                    <div key={id} className="flex items-center gap-1.5 text-sm">
-                      <Avatar className="h-5 w-5">
-                        <AvatarFallback
-                          style={{ backgroundColor: a.color }}
-                          className="text-white text-[10px]"
-                        >
-                          {a.initials}
-                        </AvatarFallback>
-                      </Avatar>
-                      {a.name}
-                    </div>
-                  )
-                })}
+                {item.assigneeIds.map((id) => (
+                  <div key={id} className="flex items-center gap-1.5 text-sm">
+                    <Avatar className="h-5 w-5">
+                      <AvatarFallback className="text-[10px] bg-muted text-muted-foreground">
+                        {id.slice(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    {id}
+                  </div>
+                ))}
               </div>
             </div>
           )}

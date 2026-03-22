@@ -7,6 +7,7 @@ export type Assignee = {
   name: string;
   initials: string;
   color: string;
+  source?: "static" | "runtime";
 };
 
 export type TicketPriority = "low" | "medium" | "high" | "urgent";

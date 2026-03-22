@@ -104,11 +104,18 @@ function extractVisibleMessageFromEnvelope(text: string): string {
 
   if (!lines.length) return "";
 
-  // Prefer the last visible line (usually the actual message body, e.g. "test").
-  const last = lines[lines.length - 1].replace(/\s+/g, " ").trim();
-  if (last) return last;
+  // Prefer the first human-looking line (stable preview, avoids random tail like "exitCode": 0).
+  const preferred = lines.find((line) => {
+    if (/^[\[{"']/.test(line)) return false;
+    if (/^(\}|\]|\),?)$/.test(line)) return false;
+    if (/^"?[A-Za-z0-9_]+"?\s*:\s*.+$/.test(line)) return false; // object field lines
+    return /[A-Za-z]/.test(line);
+  });
 
-  return lines.join(" ").replace(/\s+/g, " ").trim();
+  if (preferred) return preferred.replace(/\s+/g, " ").trim();
+
+  // fallback
+  return lines[0].replace(/\s+/g, " ").trim();
 }
 
 function summarizeGatewayLogObject(value: unknown): string {
@@ -149,6 +156,33 @@ function summarizeGatewayLogObject(value: unknown): string {
 
   if (part0) return part0;
   return "";
+}
+
+function summarizeGitStatusText(text: string): string {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const statusLines = lines.filter((l) => /^(M|A|D|R|C|\?\?)\s+/.test(l));
+  if (!statusLines.length) return "";
+
+  const counts = { modified: 0, added: 0, deleted: 0, untracked: 0 };
+  for (const line of statusLines) {
+    if (line.startsWith("M ")) counts.modified += 1;
+    else if (line.startsWith("A ")) counts.added += 1;
+    else if (line.startsWith("D ")) counts.deleted += 1;
+    else if (line.startsWith("?? ")) counts.untracked += 1;
+  }
+
+  const parts = [
+    counts.modified ? `${counts.modified} modified` : "",
+    counts.added ? `${counts.added} added` : "",
+    counts.deleted ? `${counts.deleted} deleted` : "",
+    counts.untracked ? `${counts.untracked} untracked` : "",
+  ].filter(Boolean);
+
+  return `Git status: ${statusLines.length} file(s) changed${parts.length ? ` (${parts.join(", ")})` : ""}`;
 }
 
 function summarizeToolJsonText(text: string): string {
@@ -218,6 +252,8 @@ function humanizePreview(message: string, payload: unknown): string {
 
         // Tool results are often huge JSON arrays/objects; summarize them.
         if (role.includes("tool")) {
+          const gitSummary = summarizeGitStatusText(rawText);
+          if (gitSummary) return gitSummary;
           const toolSummary = summarizeToolJsonText(rawText);
           if (toolSummary) return toolSummary;
         }
@@ -245,6 +281,17 @@ function humanizePreview(message: string, payload: unknown): string {
     const gatewaySummary = summarizeGatewayLogObject(record);
     if (gatewaySummary) return gatewaySummary.length > 220 ? `${gatewaySummary.slice(0, 217)}...` : gatewaySummary;
 
+    const aggregatedDirect = safeString(record.aggregated || "");
+    const details = (record.details && typeof record.details === "object") ? (record.details as Record<string, unknown>) : null;
+    const aggregatedFromDetails = details ? safeString(details.aggregated || "") : "";
+    const aggregated = aggregatedDirect || aggregatedFromDetails;
+    if (aggregated) {
+      const gitSummary = summarizeGitStatusText(aggregated);
+      if (gitSummary) return gitSummary;
+      const toolSummary = summarizeToolJsonText(aggregated);
+      if (toolSummary) return toolSummary;
+    }
+
     const nestedMessage = record.message as Record<string, unknown> | undefined;
     const nestedRole = safeString(nestedMessage?.role).toLowerCase();
     const nestedContent = Array.isArray(nestedMessage?.content) ? (nestedMessage?.content as Array<Record<string, unknown>>) : [];
@@ -252,6 +299,8 @@ function humanizePreview(message: string, payload: unknown): string {
       const rawText = safeString(nestedContent[0]?.text || nestedContent[0]?.message);
 
       if (nestedRole.includes("tool")) {
+        const gitSummary = summarizeGitStatusText(rawText);
+        if (gitSummary) return gitSummary;
         const toolSummary = summarizeToolJsonText(rawText);
         if (toolSummary) return toolSummary;
       }
@@ -288,16 +337,26 @@ function normalizeLog(log: AgentLog): NormalizedLog {
   const rawPayload = row.rawPayload ?? row.raw_payload ?? null;
   const message = pickString(row.message, row.message_preview, row.messagePreview);
 
+  const levelRaw = row.level;
+  const typeRaw = row.type;
+  const directionRaw = row.direction;
+  const channelRaw = row.channelType ?? row.channel_type;
+
+  const level = typeof levelRaw === "string" ? levelRaw.toLowerCase() : "info";
+  const type = typeof typeRaw === "string" ? typeRaw.toLowerCase() : "system";
+  const direction = typeof directionRaw === "string" ? directionRaw.toLowerCase() : "internal";
+  const channelType = typeof channelRaw === "string" ? channelRaw.toLowerCase() : "internal";
+
   return {
     id: pickString(row.id) || `${Date.now()}-${Math.random()}`,
     agentId: pickString(row.agentId, row.agent_id, row.runtime_agent_id, row.runtimeAgentId, "unknown"),
     agentName: pickString(row.agent_name, row.agentName, row.runtime_agent_id, row.runtimeAgentId, row.agentId, "unknown"),
     occurredAt: pickString(row.occurredAt, row.occurred_at, new Date().toISOString()),
-    level: pickString(row.level, "info").toLowerCase(),
-    type: pickString(row.type, "system").toLowerCase(),
+    level,
+    type,
     eventType: pickString(row.eventType, row.event_type, "system.warning").toLowerCase(),
-    channelType: pickString(row.channelType, row.channel_type, "internal").toLowerCase(),
-    direction: pickString(row.direction, "internal").toLowerCase(),
+    channelType,
+    direction,
     message,
     messagePreview: humanizePreview(message, rawPayload),
     runId: pickString(row.runId, row.run_id),
@@ -350,7 +409,24 @@ function eventLabel(eventType: string) {
 }
 
 function LogDetails({ log }: { log: NormalizedLog }) {
-  const fullMessage = log.message || safeString(log.rawPayload) || "(no message)";
+  const payloadRecord = (log.rawPayload && typeof log.rawPayload === "object") ? (log.rawPayload as Record<string, unknown>) : null;
+  const payloadMessage = payloadRecord?.message && typeof payloadRecord.message === "object"
+    ? (payloadRecord.message as Record<string, unknown>)
+    : null;
+  const payloadContent = Array.isArray(payloadMessage?.content)
+    ? (payloadMessage?.content as Array<Record<string, unknown>>)
+    : [];
+
+  const extractedFull = payloadContent.length > 0
+    ? safeString(payloadContent[0]?.text || payloadContent[0]?.message)
+    : "";
+
+  const fullMessage =
+    (log.message && log.message !== "[object Object]" ? log.message : "") ||
+    extractedFull ||
+    safeString(log.rawPayload) ||
+    "(no message)";
+
   return (
     <Dialog>
       <DialogTrigger asChild>

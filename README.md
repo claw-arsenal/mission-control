@@ -1,168 +1,319 @@
-# OpenClaw Dashboard
+# Mission Control
 
-A Next.js dashboard for managing OpenClaw agents, tasks, and automation. Connects to your Supabase project and OpenClaw runtime.
+Mission Control is a **local-first OpenClaw dashboard** for agents, logs, boards, runtime visibility, and operational tooling.
 
----
-
-## Prerequisites
-
-- Linux host with OpenClaw installed (runtime user: `clawdbot`)
-- Supabase project with the credentials below
-- GitHub deploy key access to the dashboard repo
-
----
-
-## Quick Start
-
-### 1. Create SSH key and clone the repo
-
-```bash
-# Generate deploy key
-sudo -u clawdbot -H bash -lc '
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-if [ ! -f ~/.ssh/dashboard_maintainer ]; then
-  ssh-keygen -t ed25519 -N "" -f ~/.ssh/dashboard_maintainer
-fi
-cat ~/.ssh/dashboard_maintainer.pub
-'
-```
-
-Add the printed public key to GitHub: repo → **Settings → Deploy keys**.
-
-```bash
-# Clone
-sudo -u clawdbot -H bash -lc '
-mkdir -p ~/apps
-GIT_SSH_COMMAND="ssh -i ~/.ssh/dashboard_maintainer -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-  git clone --branch main git@github.com:carterassist/dashboard.git ~/apps/dashboard
-'
-```
-
-### 2. Create the environment file
-
-```bash
-sudo install -d -m 755 /etc/clawd
-sudo nano /etc/clawd/template.env
-```
-
-Paste and fill in:
-
-```bash
-# Repo
-DASHBOARD_REPO_URL=git@github.com:carterassist/dashboard.git
-DASHBOARD_BRANCH=main
-DASHBOARD_APP_DIR=/home/clawdbot/apps/dashboard
-DASHBOARD_RUNTIME_USER=clawdbot
-DASHBOARD_PORT=3000
-DASHBOARD_GIT_SSH_KEY=/home/clawdbot/.ssh/dashboard_maintainer
-
-# Supabase (Project Settings → API)
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_DB_URL=your-connection-pooling-uri
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-
-# Optional: Telegram alerts when dashboard goes down
-DASHBOARD_ALERT_CHANNEL=telegram
-DASHBOARD_ALERT_TARGET=your-telegram-chat-id
-```
-
-**Where to find Supabase values:**
-- `NEXT_PUBLIC_SUPABASE_URL` → Project Settings → API → Project URL
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` → Project Settings → API → anon public key
-- `SUPABASE_DB_URL` → Connect → Connection string → Session pooler URI
-- `SUPABASE_SERVICE_ROLE_KEY` → Project Settings → API → service_role key
-
-### 3. Install the dashboard command
-
-```bash
-sudo install -m 755 /home/clawdbot/apps/dashboard/scripts/dashboard.sh \
-  /usr/local/bin/dashboard
-```
-
-### 4. Run install
-
-```bash
-sudo dashboard install --email your@email.com
-```
-
-Dashboard will be available at `http://your-server-ip:3000`.
+This README is the canonical operator + developer guide for:
+- installation
+- update workflow
+- runtime architecture
+- folder/file map
+- logs pipeline behavior
+- day-2 maintenance
 
 ---
 
-## Commands
+## 1) What this project is
 
-| Command | What it does |
-|---|---|
-| `sudo dashboard install [--email EMAIL]` | Full install (first time) |
-| `sudo dashboard update` | Pull latest, rebuild, restart all services |
-| `sudo dashboard bridge [--email EMAIL]` | Set up or repair the bridge runtime |
-| `sudo dashboard status` | Show service and bridge status |
-| `sudo dashboard uninstall [flags]` | Remove dashboard |
+Mission Control provides:
+- Dashboard UI (Next.js App Router)
+- Local PostgreSQL persistence
+- Runtime ingestion from local OpenClaw sessions/gateway logs
+- Live logs feed (SSR first load + SSE updates)
+- Dockerized packaged stack + local dev mode
 
-**Uninstall flags:**
-- `--purge-app` — delete app directory
-- `--purge-env` — delete `/etc/clawd/template.env`
-- `--purge-db` — drop all database tables
+Design goals:
+- **Local-first**
+- **No hidden cloud dependency for core operation**
+- **Operationally simple install/update scripts**
+- **Readable logs and auditable details**
 
 ---
 
-## Database
+## 2) Quick start
 
-First install sets up the database automatically. To reset:
-
+### Fresh install (recommended)
 ```bash
-cd /home/clawdbot/apps/dashboard
-printf 'yes\n' | npm run db:reset && npm run db:setup
+cd /home/clawdbot/.openclaw/workspace/mission-control
+./scripts/install.sh
+```
+
+Open:
+- http://localhost:3000/dashboard
+- http://localhost:3000/logs
+
+### Update existing install
+```bash
+cd /home/clawdbot/.openclaw/workspace/mission-control
+./scripts/update.sh
+```
+
+### Fast local development
+```bash
+cd /home/clawdbot/.openclaw/workspace/mission-control
+npm install
+./scripts/dev.sh
 ```
 
 ---
 
-## Verify
+## 3) Runtime modes
 
+## A) Docker packaged mode
+Uses `docker-compose.yml` and runs:
+- `db` (Postgres)
+- `db-init` (schema + seed initializer)
+- `app` (Next.js production)
+- `bridge-logger` (continuous log ingestion)
+
+## B) Local dev mode
+Uses `scripts/dev.sh` for faster frontend iteration.
+Typically:
+- starts DB-only services
+- runs Next dev server locally
+
+---
+
+## 4) Logs architecture (important)
+
+Logs are designed as one unified feed.
+
+### Sources
+- OpenClaw session JSONL streams (`~/.openclaw/agents/**/sessions/*.jsonl`)
+- Gateway log files (`/tmp/openclaw/openclaw-*.log`)
+- API inserts for app/runtime events
+
+### Ingestion
+`scripts/bridge-logger.mjs`:
+- tails source files continuously
+- classifies events (`chat.*`, `tool.*`, `memory.*`, `system.*`, `heartbeat.*`)
+- writes to `agent_logs`
+- issues `pg_notify('agent_logs', <id>)` for live delivery
+- auto-reconnects DB on connection loss
+- uses dedupe + lock file to prevent duplicate ingestion from multi-process starts
+
+### UI delivery path
+- `/logs` initial rows are loaded via **SSR**
+- live updates are streamed via **SSE** from `/api/agent/logs/stream`
+- stream is backed by Postgres `LISTEN/NOTIFY`
+- details modal shows full uncensored payload
+- preview is intentionally humanized/summarized
+
+---
+
+## 5) Environment variables
+
+Core DB:
+- `DATABASE_URL`
+- `OPENCLAW_DATABASE_URL` (fallback for tooling)
+
+Gateway (optional enhancement paths):
+- `OPENCLAW_GATEWAY_URL`
+- `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_GW_TOKEN`
+- `OPENCLAW_GATEWAY_API_TOKEN`
+
+Default local DB URL used in compose context:
 ```bash
-sudo dashboard status
-
-# Detailed logs
-sudo journalctl -u clawd-dashboard.service -n 50 --no-pager
-sudo -u clawdbot tail -n 40 ~/.openclaw/bridge-logger.err
+postgresql://openclaw:openclaw@db:5432/mission_control
 ```
 
 ---
 
-## Troubleshooting
+## 6) Directory and file map
 
-**Bridge shows idle agents:**
+## Root
+- `README.md` — this guide
+- `Dockerfile` — app image build/run
+- `docker-compose.yml` — packaged services
+- `docker-compose.dev.yml` — dev-oriented compose
+- `package.json` — scripts/dependencies
+- `package-lock.json` — npm lockfile
+- `postcss.config.mjs` — CSS pipeline config
+
+## App routes (`app/`)
+- `app/dashboard/page.tsx` — dashboard
+- `app/logs/page.tsx` — logs route (SSR entry)
+- `app/agents/page.tsx` — agents list
+- `app/agents/[agentId]/page.tsx` — agent detail
+- `app/boards/page.tsx` — boards
+- `app/settings/page.tsx` — settings
+- `app/login/page.tsx` — login surface
+- `app/page.tsx` — root page
+- `app/layout.tsx` — app shell
+- `app/providers.tsx` — app providers
+
+## API routes (`app/api/`)
+- `app/api/agent/logs/route.ts` — logs query/insert/delete + pagination
+- `app/api/agent/logs/stream/route.ts` — SSE stream (`LISTEN/NOTIFY`)
+- `app/api/setup/route.ts` — setup state APIs
+- `app/api/notifications/route.ts` — notifications config APIs
+
+## Components (`components/`)
+- `components/agents/logs-explorer.tsx` — logs table/filter/details UI
+- `components/agents/logs-live-refresh.tsx` — stream connection badge
+- `components/agents/logs-page-client.tsx` — post-SSR logs live behavior
+- `components/dashboard/*` — dashboard blocks, setup modal
+- `components/tasks/*` — board/task UX
+- `components/ui/*` — UI primitives (table/select/dialog/etc)
+
+## Data/runtime libraries (`lib/`)
+- `lib/local-db.ts` — Postgres client helper
+- `lib/db/index.ts` — DB abstractions
+- `lib/db/server-data.ts` — server loaders for pages
+- `lib/runtime/collector.ts` — runtime collection/merge hooks
+- `lib/runtime/types.ts` — runtime types
+
+## Scripts (`scripts/`)
+- `scripts/install.sh` — install/bootstrap flow
+- `scripts/update.sh` — update/rebuild flow
+- `scripts/dev.sh` — local dev boot flow
+- `scripts/bridge-logger.mjs` — log ingestion daemon
+- `scripts/db-setup.mjs` — DB setup helper
+- `scripts/gateway-sync.mjs` — gateway/session sync helper
+- `scripts/uninstall.sh` — teardown helper
+
+## Database (`db/`)
+- `db/schema.sql` — schema DDL
+- `db/seed.sql` — initial seed data
+
+## Runtime state (generated)
+- `.runtime/bridge-logger/offsets.json`
+- `.runtime/bridge-logger/dead-letter.jsonl`
+- `.runtime/bridge-logger/bridge-logger.lock`
+
+---
+
+## 7) Install workflow (what happens)
+
+`./scripts/install.sh` should:
+1. validate Docker/compose availability
+2. ensure env scaffolding exists
+3. build/start services via compose
+4. initialize DB (schema + seed)
+5. start app + bridge logger services
+6. leave stack running in background
+
+---
+
+## 8) Update workflow (what happens)
+
+`./scripts/update.sh` should:
+1. pull latest repository changes
+2. rebuild/restart compose services
+3. keep DB data volume intact unless explicitly reset
+4. bring up latest app and bridge logger code
+
+---
+
+## 9) Logging behavior expectations
+
+Good logs UX should provide:
+- clear event labels (human + raw event key)
+- readable preview line for each row
+- full uncensored details payload in modal
+- channel/source attribution (`telegram`, `gateway`, `internal`, `qdrant`)
+- severity (`debug`, `info`, `warning`, `error`)
+- agent attribution (name/id)
+- pagination and filtering
+- live updates without manual refresh loops
+
+If logs look duplicated, check:
+- only one bridge logger process running
+- lock file behavior in `.runtime/bridge-logger/`
+- dedupe guard in ingestion path
+
+---
+
+## 10) Common commands
+
+### Status
 ```bash
-sudo dashboard bridge
-sudo dashboard update
-```
-If logs are missing attribution:
-```bash
-cd /home/clawdbot/apps/dashboard && npm run logs:repair-attribution
+docker compose ps
 ```
 
-**Dashboard not loading after update:**
+### Tail logs
 ```bash
-sudo journalctl -u clawd-dashboard.service -n 50 --no-pager
-sudo systemctl restart clawd-dashboard.service
+docker compose logs -f app
+
+docker compose logs -f bridge-logger
 ```
 
-**Push + deploy workflow:**
+### Restart stack
 ```bash
-git commit -m "your change"
-git push origin main
-sudo dashboard update
+docker compose down
+docker compose up -d --build
+```
+
+### Hard rebuild (cache bust)
+```bash
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Start bridge logger manually (non-docker)
+```bash
+npm run bridge:logger
+```
+
+### Check bridge script syntax
+```bash
+npm run bridge:logger:check
 ```
 
 ---
 
-## How It Works
+## 11) Git workflow notes
 
-| Component | Description |
-|---|---|
-| `clawd-dashboard.service` | Runs the Next.js app |
-| `dashboard-pull.timer` | Auto-pulls and rebuilds every 15 minutes |
-| `openclaw-task-orchestrator.service` | Picks up scheduled tickets, runs them via OpenClaw, sends notifications |
-| `openclaw-dashboard-watchdog.timer` | Monitors the HTTP endpoint, Telegram alert on down/up |
-| `openclaw-bridge-logger.service` | Streams OpenClaw runtime logs into Supabase in real-time |
+If commit fails with unknown author:
+```bash
+git config user.name "<your-name>"
+git config user.email "<your-email>"
+```
+
+For SSH push auth, generate/add a key and set `origin` to SSH URL.
+
+---
+
+## 12) Troubleshooting
+
+### Logs page not updating live
+- verify `/api/agent/logs/stream` is connected
+- verify `pg_notify` is triggered on inserts
+- verify browser EventSource not blocked
+
+### Logs preview too noisy
+- expected: preview is summarized
+- details modal remains raw/full
+- adjust parsing in `components/agents/logs-explorer.tsx`
+
+### DB connection ended errors
+- bridge logger includes auto-reconnect logic
+- check DB container health and restart if needed
+
+### Duplicate logs
+- ensure single bridge logger process
+- inspect `.runtime/bridge-logger/bridge-logger.lock`
+
+---
+
+## 13) Team handoff checklist
+
+Before handing this repo to teammates, verify:
+- `./scripts/install.sh` works on clean environment
+- `./scripts/update.sh` works without manual steps
+- `/logs` SSR + live stream both work
+- bridge logger service starts automatically in compose
+- README reflects current scripts/routes
+
+---
+
+## 14) Current operational stance
+
+Mission Control is now positioned as:
+- local-first runtime dashboard
+- DB-backed observability surface
+- live agent/event log explorer
+- easy install/update via scripts
+
+If architecture changes, update this README in the same PR so onboarding never drifts.

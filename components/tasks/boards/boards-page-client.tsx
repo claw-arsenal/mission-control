@@ -160,7 +160,9 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
 
   useEffect(() => {
     if (!workspaceOpen || !ticketParam) {
-      setOpenedTicketFromQuery(null);
+      if (openedTicketFromQuery !== null) {
+        setOpenedTicketFromQuery(null);
+      }
       return;
     }
 

@@ -372,6 +372,7 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
     [assignees],
   );
   const validAssigneeIds = (ids: string[]) => ids.filter((id) => Boolean(assigneeById[id]));
+  const resolveAssigneeName = (id: string) => assigneeById[id]?.name ?? id;
 
   const ticketsList = useMemo(() => Object.values(board.tickets), [board.tickets]);
 
@@ -381,7 +382,7 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       ticketsList
         .filter((ticket) => {
           const names = ticket.assigneeIds
-            .map((id) => assigneeById[id]?.name ?? "")
+            .map((id) => resolveAssigneeName(id))
             .join(" ");
           const haystack = [ticket.title, ticket.description, ticket.tags.join(" "), names]
             .join(" ")
@@ -1440,7 +1441,7 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       });
 
       const assignedNames = assigneeIds
-        .map((id) => assigneeById[id]?.name)
+        .map((id) => resolveAssigneeName(id))
         .filter((name): name is string => Boolean(name));
       const detailParts = [
         targetColumnId ? `Created in ${board.columns[targetColumnId]?.title ?? "list"}.` : "Created ticket.",
@@ -1913,11 +1914,11 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
         const nextAssigneeIds = new Set(assigneeIds);
         const addedAssignees = assigneeIds
           .filter((id) => !previousAssigneeIds.has(id))
-          .map((id) => assigneeById[id]?.name)
+          .map((id) => resolveAssigneeName(id))
           .filter((name): name is string => Boolean(name));
         const removedAssignees = baseline.assigneeIds
           .filter((id) => !nextAssigneeIds.has(id))
-          .map((id) => assigneeById[id]?.name)
+          .map((id) => resolveAssigneeName(id))
           .filter((name): name is string => Boolean(name));
 
         if (addedAssignees.length > 0) {

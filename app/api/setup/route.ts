@@ -1,145 +1,37 @@
 import { NextResponse } from "next/server";
-import { getServerSupabaseClient } from "@/lib/supabase/server";
+import { getSql } from "@/lib/local-db";
 
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-type SetupPayload = {
-  setupCompleted?: boolean;
-  bridgeEmail?: string;
-};
-
-async function getContext() {
-  const supabase = await getServerSupabaseClient();
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError) {
-    throw new Error(userError.message);
-  }
-
-  if (!user) {
-    return { supabase, user: null, workspaceId: "" };
-  }
-
-  const { data: configuredRows, error: configuredError } = await supabase
-    .from("user_workspace_settings")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .eq("setup_completed", true)
-    .order("updated_at", { ascending: false })
-    .limit(1);
-
-  if (configuredError) {
-    throw new Error(configuredError.message);
-  }
-
-  const configuredWorkspaceId = configuredRows?.[0]?.workspace_id as string | undefined;
-  if (configuredWorkspaceId) {
-    return {
-      supabase,
-      user,
-      workspaceId: configuredWorkspaceId,
-    };
-  }
-
-  const { data: memberships, error: membershipError } = await supabase
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .order("workspace_id", { ascending: true })
-    .limit(1);
-
-  if (membershipError) {
-    throw new Error(membershipError.message);
-  }
-
-  return {
-    supabase,
-    user,
-    workspaceId: (memberships?.[0]?.workspace_id as string | undefined) ?? "",
-  };
-}
+export const dynamic = "force-dynamic";
 
 export async function GET() {
-  try {
-    const { supabase, user, workspaceId } = await getContext();
-
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    if (!workspaceId) {
-      return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
-    }
-
-    const { data, error } = await supabase
-      .from("user_workspace_settings")
-      .select("setup_completed, settings")
-      .eq("workspace_id", workspaceId)
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    return NextResponse.json({
-      setupCompleted: data?.setup_completed === true,
-      settings: (data?.settings as Record<string, unknown> | null) ?? {},
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to load setup." },
-      { status: 500 },
-    );
+  const sql = getSql();
+  const exists = await sql`select to_regclass('public.app_settings') as exists`;
+  if (!exists[0]?.exists) {
+    return NextResponse.json({ setupCompleted: false, settings: { gatewayToken: "" } });
   }
+  const rows = await sql`select setup_completed, gateway_token from app_settings where id = 1 limit 1`;
+  const row = rows[0] ?? { setup_completed: false, gateway_token: "" };
+  return NextResponse.json({
+    setupCompleted: Boolean(row.setup_completed),
+    settings: { gatewayToken: String(row.gateway_token || "").trim() },
+  });
 }
 
 export async function POST(request: Request) {
-  try {
-    const { supabase, user, workspaceId } = await getContext();
+  const sql = getSql();
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const gatewayToken = String(body.gatewayToken || "").trim();
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  await sql`create table if not exists app_settings (id integer primary key default 1, gateway_token text not null default '', setup_completed boolean not null default false, created_at timestamptz not null default now(), updated_at timestamptz not null default now(), constraint app_settings_single_row check (id = 1))`;
+  await sql`
+    insert into app_settings (id, gateway_token, setup_completed)
+    values (1, ${gatewayToken}, ${gatewayToken.length > 0})
+    on conflict (id) do update
+      set gateway_token = excluded.gateway_token,
+          setup_completed = excluded.setup_completed,
+          updated_at = now()
+  `;
 
-    if (!workspaceId) {
-      return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
-    }
-
-    const payload = ((await request.json().catch(() => ({}))) ?? {}) as SetupPayload;
-
-    const bridgeEmail = String(payload.bridgeEmail || "").trim();
-    if (bridgeEmail && !emailPattern.test(bridgeEmail)) {
-      return NextResponse.json({ error: "Bridge email is invalid." }, { status: 400 });
-    }
-
-    const settings = {
-      bridgeEmail,
-    };
-
-    const { error } = await supabase.from("user_workspace_settings").upsert(
-      {
-        workspace_id: workspaceId,
-        user_id: user.id,
-        setup_completed: payload.setupCompleted === true,
-        settings,
-      },
-      { onConflict: "workspace_id,user_id" },
-    );
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to save setup." },
-      { status: 500 },
-    );
-  }
+  const saved = await sql`select setup_completed, gateway_token from app_settings where id = 1 limit 1`;
+  return NextResponse.json({ ok: true, saved: saved[0] ?? null });
 }

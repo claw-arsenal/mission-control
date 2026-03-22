@@ -6,6 +6,13 @@ export type RuntimeSnapshotIdentity = {
   role: string;
 };
 
+export type RuntimeAssignee = {
+  id: string;
+  name: string;
+  initials: string;
+  color: string;
+};
+
 export type RuntimeSnapshot = {
   agentId: string;
   name: string;
