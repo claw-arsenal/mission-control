@@ -635,7 +635,7 @@ docker compose restart bridge-logger
 - `npm run dev` — unified start (all Docker services + Next.js hot-reload)
 - `gateway-sync.mjs` — imports openclaw sessions and agents into DB on startup
 
-**Known limitations (v1.0.0)**
+**Known limitations**
 
 - Activity chart component is a placeholder (ready to wire up with a time-series query)
 - Agent debug overlay requires `NEXT_PUBLIC_AGENT_DEBUG_OVERLAY=true` env var to show

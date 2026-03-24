@@ -1,55 +1,51 @@
 #!/usr/bin/env bash
+# ============================================================
+# OpenClaw Mission Control — Bootstrap Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/claw-arsenal/mission-control/main/install.sh | bash
+# ============================================================
 set -euo pipefail
 
-# Mission Control — One-time installer
-# Clones the repo, configures environment, starts all services.
-# Safe to re-run on an existing install (will skip clone and pull latest).
-
-GIT_URL="git@github.com:claw-arsenal/mission-control.git"
-DEFAULT_DIR="$HOME/mission-control"
+# ── Constants ───────────────────────────────────────────────
+GIT_REPO="git@github.com:claw-arsenal/mission-control.git"
 GIT_BRANCH="${GIT_BRANCH:-main}"
-# Allow overriding via env or detect current directory if already in a git repo
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+INSTALL_DIR="${INSTALL_DIR:-/home/clawdbot/workspace/mission-control}"
+RUN_AS="${RUN_AS:-clawdbot}"
 
-# If already inside the mission-control repo, use that path
-if [ -d "$PROJECT_ROOT/.git" ] && git -C "$PROJECT_ROOT" remote get-url origin 2>/dev/null | grep -q "mission-control"; then
-  INSTALL_DIR="$PROJECT_ROOT"
-else
-  INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_DIR}"
-fi
-
-set -e
-
-# ── Colors ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+# ── Colors ──────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[install]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[install]${NC} $1"; }
 err()   { echo -e "${RED}[install]${NC} $1" >&2; }
+step()  { echo -e "${CYAN}[install]${NC} $1"; }
 
-# ── Header ─────────────────────────────────────────────────────────────────
+# ── Header ──────────────────────────────────────────────────
 echo ""
-echo "╔═══════════════════════════════════════════╗"
-echo "║     Mission Control — One-time Setup     ║"
-echo "╚═══════════════════════════════════════════╝"
+echo "╔═══════════════════════════════════════════════════════╗"
+echo "║    OpenClaw Mission Control — Bootstrap Installer     ║"
+echo "╚═══════════════════════════════════════════════════════╝"
 echo ""
 
-# ── Detect existing install ─────────────────────────────────────────────────
-if [ -d "$INSTALL_DIR/.git" ]; then
-  info "Repository found at $INSTALL_DIR"
-  cd "$INSTALL_DIR"
-  warn "Pulling latest changes..."
-  git pull origin "$GIT_BRANCH" 2>/dev/null || true
+# ── Detect if running as root ───────────────────────────────
+if [ "$(id -u)" -eq 0 ]; then
+  warn "Running as root — will switch to '$RUN_AS' for workspace operations."
+  RUN_AS_HOME=$(getent passwd "$RUN_AS" | cut -d: -f6)
+  if [ -z "$RUN_AS_HOME" ]; then
+    err "User '$RUN_AS' does not exist. Create it first or set RUN_AS env var."
+    exit 1
+  fi
+  INSTALL_DIR="${INSTALL_DIR:-${RUN_AS_HOME}/workspace/mission-control}"
 else
-  info "Cloning mission-control into $INSTALL_DIR ..."
-  mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone --branch "$GIT_BRANCH" "$GIT_URL" "$INSTALL_DIR"
-  cd "$INSTALL_DIR"
+  RUN_AS="$(whoami)"
+  RUN_AS_HOME="$HOME"
+  INSTALL_DIR="${INSTALL_DIR:-$HOME/workspace/mission-control}"
 fi
 
-# ── Prerequisites ────────────────────────────────────────────────────────────
-info "Checking prerequisites ..."
-for cmd in docker docker-compose git node npm; do
+info "Target directory: $INSTALL_DIR"
+echo ""
+
+# ── Prerequisites ───────────────────────────────────────────
+step "Checking prerequisites ..."
+for cmd in docker docker-compose git; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     err "Missing required command: $cmd"
     exit 1
@@ -61,18 +57,41 @@ if [ "$(printf '%s\n' "20.10.0" "$DOCKER_VERSION" | sort -V | head -n1)" != "20.
   err "Docker 20.10+ required. Found: $DOCKER_VERSION"
   exit 1
 fi
+info "Docker $DOCKER_VERSION — OK"
 
-NODE_VERSION=$(node -v | sed 's/v//')
-if [ "$(printf '%s\n' "24.0.0" "$NODE_VERSION" | sort -V | head -n1)" != "24.0.0" ]; then
-  warn "Node.js 24+ recommended. Found: $NODE_VERSION"
+# ── Detect SSH deploy key ───────────────────────────────────
+step "Checking SSH access to GitHub ..."
+if ssh -T git@github.com 2>/dev/null | grep -q "successfully"; then
+  info "SSH access to GitHub — OK"
+  USE_HTTPS="no"
+else
+  warn "No SSH access to GitHub. Switching to HTTPS clone."
+  warn "For SSH, add your deploy key at: https://github.com/claw-arsenal/mission-control/settings/keys"
+  GIT_REPO="https://github.com/claw-arsenal/mission-control.git"
+  USE_HTTPS="yes"
+fi
+echo ""
+
+# ── Clone or update ────────────────────────────────────────
+if [ -d "$INSTALL_DIR/.git" ]; then
+  info "Existing install found at $INSTALL_DIR"
+  step "Pulling latest changes ..."
+  cd "$INSTALL_DIR"
+  sudo -u "$RUN_AS" git pull origin "$GIT_BRANCH" 2>&1 | tail -3 || true
+else
+  step "Cloning mission-control into $INSTALL_DIR ..."
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  if [ "$USE_HTTPS" = "yes" ]; then
+    sudo -u "$RUN_AS" git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$INSTALL_DIR"
+  else
+    sudo -u "$RUN_AS" git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$INSTALL_DIR"
+  fi
+  cd "$INSTALL_DIR"
 fi
 
-info "All prerequisites OK"
-
-# ── Environment ─────────────────────────────────────────────────────────────
+# ── Environment setup ──────────────────────────────────────
 if [ ! -f .env ]; then
-  info "Creating .env from template ..."
-  # Generate strong random passwords
+  step "Creating .env from template ..."
   POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
   API_USER="admin"
   API_PASS=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
@@ -86,39 +105,38 @@ OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=
 EOF
   chmod 600 .env
-  warn ".env created with generated passwords:"
+  chown "$RUN_AS:$RUN_AS" .env
+  warn ".env created — credentials:"
   echo "  POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
   echo "  API_USER=${API_USER}"
   echo "  API_PASS=${API_PASS}"
   echo ""
-  warn "Save these credentials — the password cannot be recovered."
+  warn "Save these credentials — they cannot be recovered."
   echo ""
 else
-  info ".env already present"
+  info ".env already present — skipping"
 fi
 
-# Copy for Next.js dev server
+# Copy .env for Next.js dev server
 cp .env .env.local 2>/dev/null || true
+chown -R "$RUN_AS:$RUN_AS" .env.local 2>/dev/null || true
 
-# ── Pre-create runtime dir (for bridge-logger lock file) ──────────────────
-info "Creating runtime directory ..."
+# ── Runtime directory ───────────────────────────────────────
 mkdir -p .runtime/bridge-logger
 touch .runtime/bridge-logger/bridge-logger.lock
 chmod 666 .runtime/bridge-logger/bridge-logger.lock
+chown -R "$RUN_AS:$RUN_AS" .runtime 2>/dev/null || true
 
-# ── Docker images ───────────────────────────────────────────────────────────
-info "Pulling base Docker images ..."
-docker compose pull db postgres 2>&1 | grep -v "^Pulling\|^$\|" | head -5 || true
+# ── Docker build ────────────────────────────────────────────
+step "Building Docker images ..."
+docker compose build --pull bridge-logger task-worker gateway-sync 2>&1 | tail -5
 
-info "Building custom images ..."
-docker compose build --pull bridge-logger task-worker gateway-sync 2>&1 | tail -3
-
-# ── Start services ──────────────────────────────────────────────────────────
-info "Starting database ..."
+# ── Start services ──────────────────────────────────────────
+step "Starting database ..."
 docker compose up -d db
 docker compose up -d db-init
 
-info "Waiting for database to be ready ..."
+step "Waiting for database to be ready ..."
 until docker compose exec -T db pg_isready -U openclaw -d mission_control >/dev/null 2>&1; do
   printf "."
   sleep 1
@@ -126,7 +144,7 @@ done
 echo ""
 info "Database ready."
 
-info "Waiting for schema initialization ..."
+step "Waiting for schema initialization ..."
 while docker compose ps db-init 2>/dev/null | grep -q "Up"; do
   printf "."
   sleep 1
@@ -134,31 +152,46 @@ done
 echo ""
 info "Schema initialized."
 
-info "Starting supporting services ..."
-docker compose up -d gateway-sync bridge-logger task-worker
+step "Starting all services ..."
+docker compose up -d --build bridge-logger task-worker gateway-sync
 
-# ── npm install ─────────────────────────────────────────────────────────────
-info "Installing npm dependencies ..."
-npm install
+# ── npm install (as target user) ────────────────────────────
+step "Installing npm dependencies ..."
+if [ "$(id -u)" -eq 0 ]; then
+  sudo -u "$RUN_AS" npm install 2>&1 | tail -3
+else
+  npm install 2>&1 | tail -3
+fi
 
-# ── Done ────────────────────────────────────────────────────────────────────
+# ── Symlink convenience scripts ──────────────────────────────
+step "Creating convenience symlinks in /usr/local/bin ..."
+for script in install clean update uninstall; do
+  symlink="/usr/local/bin/mc-${script}"
+  source_file="$INSTALL_DIR/scripts/${script}.sh"
+  if [ -f "$source_file" ]; then
+    ln -sf "$source_file" "$symlink"
+    chmod +x "$source_file"
+    info "  /usr/local/bin/mc-${script} -> $source_file"
+  fi
+done
 echo ""
-echo "╔═══════════════════════════════════════════╗"
-echo "║            Installation complete!         ║"
-echo "╚═══════════════════════════════════════════╝"
+
+# ── Done ────────────────────────────────────────────────────
+echo "╔═══════════════════════════════════════════════════════╗"
+echo "║            Installation complete!                     ║"
+echo "╚═══════════════════════════════════════════════════════╝"
 echo ""
-echo "Next steps:"
+echo "Location: $INSTALL_DIR"
 echo ""
-echo "  1. Start Docker services (keep running in a terminal):"
-echo "     npm run dev:docker"
+echo "Shortcuts (or use /usr/local/bin/mc-*):"
+echo "  mc-update      — pull latest + restart services"
+echo "  mc-clean       — reset containers, re-pull latest"
+echo "  mc-uninstall   — remove everything"
 echo ""
-echo "  2. Start the dev server (in another terminal):"
-echo "     npm run dev"
+echo "Manual commands:"
+echo "  cd $INSTALL_DIR"
+echo "  npm run dev       — start Next.js dev server"
+echo "  docker compose up  — start all services"
 echo ""
-echo "  Or run both together:"
-echo "     npm run dev:full"
-echo ""
-echo "  Open: http://localhost:3000"
-echo ""
-echo "  Credentials saved in: $INSTALL_DIR/.env"
+echo "Open: http://localhost:3000"
 echo ""
