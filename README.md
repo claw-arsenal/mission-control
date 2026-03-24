@@ -388,6 +388,19 @@ mission-control/
 - Node.js 24+
 - OpenClaw installed and gateway running on `ws://127.0.0.1:18789`
 
+### Required host-level dependencies
+
+Mission Control's `task-worker` runs `openclaw agent` on the host, so it needs the OpenClaw runtime accessible. These are not optional:
+
+| Dependency | Path | Why |
+|---|---|---|
+| OpenClaw runtime | `~/.openclaw/` | Agents, credentials, auth profiles — mounted into task-worker container |
+| OpenClaw binary | `/usr/bin/openclaw` | task-worker calls this to execute agents |
+| OpenClaw gateway | `ws://127.0.0.1:18789` | Must be running for agent execution |
+| SSH keys | `~/.ssh/` | Only needed if pushing to git from the host |
+
+> **Note:** The `task-worker` Docker container binds `~/.openclaw` as a volume. This is intentional — Mission Control runs agents through your existing OpenClaw installation, not inside an isolated container. It is not possible to run Mission Control without a working OpenClaw installation on the host.
+
 ### First-time setup (bootstrap)
 
 **One-line install (recommended):**

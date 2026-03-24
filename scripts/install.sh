@@ -2,13 +2,18 @@
 # ============================================================
 # OpenClaw Mission Control — Bootstrap Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/claw-arsenal/mission-control/main/install.sh | bash
+#
+# Default install location: ~/.openclaw/workspace/mission-control
+# (inside the OpenClaw workspace — matches openclaw setup layout)
+# Override with: INSTALL_DIR=/path/to/dir bash -c "$(curl ...)"
 # ============================================================
 set -euo pipefail
 
 # ── Constants ───────────────────────────────────────────────
 GIT_REPO="git@github.com:claw-arsenal/mission-control.git"
 GIT_BRANCH="${GIT_BRANCH:-main}"
-INSTALL_DIR="${INSTALL_DIR:-/home/clawdbot/workspace/mission-control}"
+# Default: inside the OpenClaw workspace (where openclaw setup put it)
+DEFAULT_DIR="$HOME/.openclaw/workspace/mission-control"
 RUN_AS="${RUN_AS:-clawdbot}"
 
 # ── Colors ──────────────────────────────────────────────────
