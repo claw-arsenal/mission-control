@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "docker compose up -d db db-init bridge-logger task-worker gateway-sync && next dev",
-    "dev:stop": "docker compose stop db db-init bridge-logger task-worker gateway-sync",
+    "dev": "docker compose up -d db db-init && bash scripts/mc-services.sh start && next dev",
+    "dev:stop": "docker compose stop db && bash scripts/mc-services.sh stop",
+    "dev:db": "docker compose up -d db db-init",
+    "dev:services": "bash scripts/mc-services.sh start",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

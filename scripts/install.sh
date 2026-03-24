@@ -12,9 +12,8 @@ set -euo pipefail
 # ── Constants ───────────────────────────────────────────────
 GIT_REPO="git@github.com:claw-arsenal/mission-control.git"
 GIT_BRANCH="${GIT_BRANCH:-main}"
-# Default: inside the OpenClaw workspace (where openclaw setup put it)
 DEFAULT_DIR="$HOME/.openclaw/workspace/mission-control"
-RUN_AS="${RUN_AS:-clawdbot}"
+RUN_AS="${RUN_AS:-$(whoami)}"
 
 # ── Colors ──────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -30,27 +29,23 @@ echo "║    OpenClaw Mission Control — Bootstrap Installer     ║"
 echo "╚═══════════════════════════════════════════════════════╝"
 echo ""
 
-# ── Detect if running as root ───────────────────────────────
-if [ "$(id -u)" -eq 0 ]; then
-  warn "Running as root — will switch to '$RUN_AS' for workspace operations."
-  RUN_AS_HOME=$(getent passwd "$RUN_AS" | cut -d: -f6)
-  if [ -z "$RUN_AS_HOME" ]; then
-    err "User '$RUN_AS' does not exist. Create it first or set RUN_AS env var."
-    exit 1
-  fi
-  INSTALL_DIR="${INSTALL_DIR:-${RUN_AS_HOME}/workspace/mission-control}"
+# ── Resolve install directory ────────────────────────────────
+if [ -n "${INSTALL_DIR:-}" ]; then
+  :
+elif [ -d "$HOME/.openclaw/workspace/mission-control/.git" ]; then
+  INSTALL_DIR="$HOME/.openclaw/workspace/mission-control"
+elif [ -d "$(dirname "$DEFAULT_DIR")/.git" ]; then
+  INSTALL_DIR="$(dirname "$DEFAULT_DIR")"
 else
-  RUN_AS="$(whoami)"
-  RUN_AS_HOME="$HOME"
-  INSTALL_DIR="${INSTALL_DIR:-$HOME/workspace/mission-control}"
+  INSTALL_DIR="$DEFAULT_DIR"
 fi
 
-info "Target directory: $INSTALL_DIR"
+info "Installing to: $INSTALL_DIR"
 echo ""
 
 # ── Prerequisites ───────────────────────────────────────────
 step "Checking prerequisites ..."
-for cmd in docker docker-compose git; do
+for cmd in docker docker-compose git node npm; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     err "Missing required command: $cmd"
     exit 1
@@ -64,16 +59,12 @@ if [ "$(printf '%s\n' "20.10.0" "$DOCKER_VERSION" | sort -V | head -n1)" != "20.
 fi
 info "Docker $DOCKER_VERSION — OK"
 
-# ── Detect SSH deploy key ───────────────────────────────────
 step "Checking SSH access to GitHub ..."
 if ssh -T git@github.com 2>/dev/null | grep -q "successfully"; then
   info "SSH access to GitHub — OK"
-  USE_HTTPS="no"
 else
   warn "No SSH access to GitHub. Switching to HTTPS clone."
-  warn "For SSH, add your deploy key at: https://github.com/claw-arsenal/mission-control/settings/keys"
   GIT_REPO="https://github.com/claw-arsenal/mission-control.git"
-  USE_HTTPS="yes"
 fi
 echo ""
 
@@ -82,15 +73,11 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   info "Existing install found at $INSTALL_DIR"
   step "Pulling latest changes ..."
   cd "$INSTALL_DIR"
-  sudo -u "$RUN_AS" git pull origin "$GIT_BRANCH" 2>&1 | tail -3 || true
+  git pull origin "$GIT_BRANCH" 2>&1 | tail -3 || true
 else
   step "Cloning mission-control into $INSTALL_DIR ..."
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  if [ "$USE_HTTPS" = "yes" ]; then
-    sudo -u "$RUN_AS" git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$INSTALL_DIR"
-  else
-    sudo -u "$RUN_AS" git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$INSTALL_DIR"
-  fi
+  git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
 fi
 
@@ -110,7 +97,6 @@ OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=
 EOF
   chmod 600 .env
-  chown "$RUN_AS:$RUN_AS" .env
   warn ".env created — credentials:"
   echo "  POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
   echo "  API_USER=${API_USER}"
@@ -122,22 +108,15 @@ else
   info ".env already present — skipping"
 fi
 
-# Copy .env for Next.js dev server
 cp .env .env.local 2>/dev/null || true
-chown -R "$RUN_AS:$RUN_AS" .env.local 2>/dev/null || true
 
-# ── Runtime directory ───────────────────────────────────────
-mkdir -p .runtime/bridge-logger
-touch .runtime/bridge-logger/bridge-logger.lock
-chmod 666 .runtime/bridge-logger/bridge-logger.lock
-chown -R "$RUN_AS:$RUN_AS" .runtime 2>/dev/null || true
+# ── Runtime directories ───────────────────────────────────────
+mkdir -p .runtime/bridge-logger .runtime/pids .runtime/logs
+touch .runtime/bridge-logger/bridge-logger.lock .runtime/bridge-logger/offsets.json
+chmod 666 .runtime/bridge-logger/bridge-logger.lock .runtime/bridge-logger/offsets.json
 
-# ── Docker build ────────────────────────────────────────────
-step "Building Docker images ..."
-docker compose build --pull bridge-logger task-worker gateway-sync 2>&1 | tail -5
-
-# ── Start services ──────────────────────────────────────────
-step "Starting database ..."
+# ── Docker: start database only ───────────────────────────
+step "Starting database container ..."
 docker compose up -d db
 docker compose up -d db-init
 
@@ -157,46 +136,45 @@ done
 echo ""
 info "Schema initialized."
 
-step "Starting all services ..."
-docker compose up -d --build bridge-logger task-worker gateway-sync
-
-# ── npm install (as target user) ────────────────────────────
+# ── npm install ──────────────────────────────────────────────
 step "Installing npm dependencies ..."
-if [ "$(id -u)" -eq 0 ]; then
-  sudo -u "$RUN_AS" npm install 2>&1 | tail -3
-else
-  npm install 2>&1 | tail -3
-fi
+npm install 2>&1 | tail -3
 
-# ── Symlink convenience scripts ──────────────────────────────
+# ── mc-services: start host-level daemons ────────────────────
+step "Starting host-level services (task-worker, gateway-sync, bridge-logger) ..."
+bash scripts/mc-services.sh start 2>&1 | sed 's/^/  /'
+
+# ── Convenience symlinks ─────────────────────────────────────
 step "Creating convenience symlinks in /usr/local/bin ..."
-for script in install clean update uninstall; do
+for script in install clean update uninstall mc-services; do
   symlink="/usr/local/bin/mc-${script}"
   source_file="$INSTALL_DIR/scripts/${script}.sh"
   if [ -f "$source_file" ]; then
     ln -sf "$source_file" "$symlink"
     chmod +x "$source_file"
-    info "  /usr/local/bin/mc-${script} -> $source_file"
+    info "  /usr/local/bin/mc-${script}"
   fi
 done
 echo ""
 
 # ── Done ────────────────────────────────────────────────────
 echo "╔═══════════════════════════════════════════════════════╗"
-echo "║            Installation complete!                     ║"
+echo "║            Installation complete!                   ║"
 echo "╚═══════════════════════════════════════════════════════╝"
 echo ""
 echo "Location: $INSTALL_DIR"
 echo ""
-echo "Shortcuts (or use /usr/local/bin/mc-*):"
-echo "  mc-update      — pull latest + restart services"
-echo "  mc-clean       — reset containers, re-pull latest"
-echo "  mc-uninstall   — remove everything"
+echo "Services running:"
+echo "  PostgreSQL (Docker)  — port 5432"
+echo "  task-worker (host)   — executes agent tickets"
+echo "  gateway-sync (host)  — imports openclaw sessions"
+echo "  bridge-logger (host) — tails openclaw logs to DB"
 echo ""
-echo "Manual commands:"
-echo "  cd $INSTALL_DIR"
-echo "  npm run dev       — start Next.js dev server"
-echo "  docker compose up  — start all services"
+echo "Next steps:"
+echo "  npm run dev          — start Next.js dev server"
+echo "  mc-services status   — check service status"
+echo "  mc-update           — pull latest + restart"
+echo "  mc-clean            — fresh start"
 echo ""
 echo "Open: http://localhost:3000"
 echo ""

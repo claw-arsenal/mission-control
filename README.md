@@ -161,34 +161,49 @@ The gateway-sync script (`scripts/gateway-sync.mjs`) runs on startup and one-tim
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                     Browser (SSE)                        │
-│   /boards  /logs  /agents  /dashboard  /approvals        │
-└────────────────────────┬─────────────────────────────────┘
-                         │ HTTP + SSE
-                         ▼
-┌──────────────────────────────────────────────────────────┐
-│              Next.js App (port 3000)                     │
-│   Server Components + API Routes + SSE endpoints         │
-└────────────┬───────────────────────┬───────────────────┘
-             │                       │
-             │ HTTP/REST             │ LISTEN/NOTIFY
-             ▼                       ▼
-┌────────────────────┐    ┌────────────────────────────────┐
-│   PostgreSQL DB    │◄───│       task-worker (mjs)        │
-│  (Docker volume)   │    │  Picks tickets via SKIP LOCKED │
-│                    │    │  Runs openclaw agent           │
-└────────────────────┘    │  Writes activity + status      │
-       ▲                  └───────────────┬────────────────┘
-       │ LISTEN/NOTIFY                    │ openclaw agent │
-       │                                  ▼                │
-┌─────────────┐    ┌────────────────────────────────────────┐
-│bridge-      │    │         OpenClaw Gateway               │
-│logger (mjs) │    │        (ws://127.0.0.1:18789)         │
-│Tails session│    └────────────────────────────────────────┘
-│+ gateway logs│
-└─────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Browser (SSE)                           │
+│   /boards  /logs  /agents  /dashboard  /approvals         │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ HTTP + SSE
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Next.js App (port 3000)                       │
+│   Server Components + API Routes + SSE endpoints            │
+└─────────────┬─────────────────────────┬───────────────────┘
+              │                         │
+              │ HTTP/REST               │ LISTEN/NOTIFY
+              ▼                         ▼
+┌───────────────────────┐   ┌─────────────────────────────────┐
+│   PostgreSQL DB       │◄──│      task-worker (host)         │
+│   (Docker only)       │   │  Picks tickets via SKIP LOCKED  │
+│                       │   │  Runs openclaw agent            │
+└───────────────────────┘   │  Writes activity + status       │
+        ▲                   └──────────────┬────────────────┘
+        │ LISTEN/NOTIFY                     │ openclaw agent │
+        │                                   ▼                │
+┌───────────────┐   ┌─────────────────────────────────────────┐
+│ bridge-logger │   │          OpenClaw Gateway              │
+│ (host) tails  │   │         (ws://127.0.0.1:18789)        │
+│ openclaw logs │   └─────────────────────────────────────────┘
+└───────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────┐
+│              gateway-sync (host)                            │
+│  Imports openclaw sessions + agents into DB on startup      │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### Services
+
+| Service | Where | Why |
+|---|---|---|
+| PostgreSQL | Docker | No host dependency, portable |
+| Next.js | Host (or Docker) | Node.js 24+ on host, hot-reload dev |
+| task-worker | Host | Calls openclaw binary + needs `~/.openclaw` access |
+| gateway-sync | Host | Calls openclaw binary |
+| bridge-logger | Host | Tails log files from `~/.openclaw` |
 
 ### Services
 
@@ -349,10 +364,11 @@ mission-control/
 
 | Script | Purpose |
 |---|---|
-| `./scripts/install.sh` | **Bootstrap install.** Clones repo (or pulls latest), generates `.env`, builds Docker images, starts DB + all workers, runs `npm install`, creates `/usr/local/bin/mc-*` shortcuts. Safe to re-run. |
-| `./scripts/update.sh` | **Update existing install.** Git pull, detects changed files (new/removed scripts, package.json, Docker files), rebuilds/restarts only what's needed, updates symlinks. |
-| `./scripts/clean.sh` | **Fresh start.** Stops + removes all containers and volumes, re-pulls latest from git, rebuilds and restarts everything. Use when you want a clean slate without re-cloning. |
-| `./scripts/uninstall.sh` | **Complete removal.** Stops all containers, removes volumes and project images, deletes the project directory, removes `/usr/local/bin/mc-*` shortcuts. |
+| `./scripts/mc-services.sh` | Service supervisor for all host-level daemons. `start` / `stop` / `restart` / `status` for task-worker, gateway-sync, bridge-logger. |
+| `./scripts/install.sh` | **Bootstrap install.** Clones repo (or pulls latest), generates `.env`, starts Docker DB, runs `npm install`, starts all host services, creates `/usr/local/bin/mc-*` shortcuts. |
+| `./scripts/update.sh` | **Update existing install.** Git pull, detects package.json changes, rebuilds Next.js, restarts host services via `mc-services.sh`. |
+| `./scripts/clean.sh` | **Fresh start.** Stops all services + Docker, removes volumes, re-pulls latest, re-initializes DB, restarts everything. |
+| `./scripts/uninstall.sh` | **Complete removal.** Stops all services, removes Docker volumes, deletes project dir, removes `mc-*` shortcuts. |
 | `./scripts/db-init.sh` | **DB schema init.** SQL schema + seed data. Run automatically on first start via `db-init` container. |
 
 ### Runtime worker scripts
@@ -367,16 +383,21 @@ mission-control/
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Start all Docker services (db, db-init, bridge-logger, task-worker, gateway-sync) then start Next.js dev server |
-| `npm run dev:stop` | Stop all Docker services |
+| `npm run dev` | Start Docker DB, start all host services (task-worker, gateway-sync, bridge-logger), then start Next.js dev server |
+| `npm run dev:stop` | Stop Docker DB and all host services |
+| `npm run dev:db` | Start Docker DB only |
+| `npm run dev:services` | Start host services only (task-worker, gateway-sync, bridge-logger) |
 | `npm run build` | Build Next.js for production |
 | `npm run start` | Start production Next.js server |
 | `npm run db:setup` | Run schema + seed SQL |
 | `npm run db:reset` | Drop all tables and re-run schema + seed |
-| `npm run bridge:logger` | Run bridge-logger directly (for debugging outside Docker) |
-| `npm run worker:tasks` | Run task-worker directly (for debugging outside Docker) |
+| `npm run bridge:logger` | Run bridge-logger directly (for debugging) |
+| `npm run worker:tasks` | Run task-worker directly (for debugging) |
 | `npm run bridge:logger:check` | Syntax-check bridge-logger.mjs |
 | `npm run worker:tasks:check` | Syntax-check task-worker.mjs |
+| `mc-services start` | Start task-worker, gateway-sync, bridge-logger as daemons |
+| `mc-services stop` | Stop all host daemon services |
+| `mc-services status` | Show service status + last log lines |
 
 ---
 
@@ -408,21 +429,16 @@ Mission Control's `task-worker` runs `openclaw agent` on the host, so it needs t
 curl -fsSL https://raw.githubusercontent.com/claw-arsenal/mission-control/main/install.sh | bash
 ```
 
-This clones the repo into `/home/clawdbot/workspace/mission-control`, generates `.env`, builds all Docker images, starts the database + workers, runs `npm install`, and creates convenience shortcuts in `/usr/local/bin/mc-*`.
+This clones the repo into `~/.openclaw/workspace/mission-control`, generates `.env`, starts the PostgreSQL Docker container, runs `npm install`, starts all host-level services, and creates convenience shortcuts in `/usr/local/bin/mc-*`.
 
 **After install, shortcuts are available:**
 ```bash
-mc-update      # pull latest + restart services (no fresh)
-mc-clean       # reset containers + volumes + re-pull latest
-mc-uninstall   # remove everything
-```
-
-**Or run scripts directly:**
-```bash
-./scripts/install.sh   # first-time setup
-./scripts/update.sh    # pull latest + rebuild + restart
-./scripts/clean.sh     # fresh start (destroys DB, re-initializes)
-./scripts/uninstall.sh # complete removal
+mc-services start   # start task-worker, gateway-sync, bridge-logger
+mc-services stop    # stop all host services
+mc-services status  # check status + recent log lines
+mc-update          # pull latest + restart host services
+mc-clean           # reset containers + volumes + fresh start
+mc-uninstall       # remove everything
 ```
 
 ### Development
@@ -467,15 +483,15 @@ See `.env.example`. Key variables:
 ### Database reset
 
 ```bash
-docker compose down
-docker volume rm mission-control_pgdata
+mc-services stop
+docker compose down --volumes
 docker compose up -d db db-init
-docker compose up -d bridge-logger task-worker gateway-sync
+mc-services start
 ```
 
 ### Multi-queue workers
 
-Set `WORKER_QUEUE=high-priority` (or any name) in the `task-worker` service environment. Tickets have a `queue_name` field defaulting to `default`. Workers only pick up tickets with matching queue names. This lets you run separate worker pools for different priority tiers without interference.
+Set `WORKER_QUEUE=high-priority` (or any name) in the task-worker environment when starting it. Tickets have a `queue_name` field defaulting to `default`. Workers only pick up tickets with matching queue names.
 
 ---
 
