@@ -526,7 +526,7 @@ export function TicketDetailsModal({
                       {/* Row 2: Execution Mode + action buttons — full width */}
                       <div className="space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <div className="space-y-1.5">
+                          <div className="space-y-1.5 flex-1 min-w-0">
                             <Label>Execution</Label>
                             <Select
                               value={form.executionMode}
@@ -534,7 +534,7 @@ export function TicketDetailsModal({
                                 onChange({ executionMode: value as TicketDetailsForm["executionMode"] })
                               }
                             >
-                              <SelectTrigger className="flex-1 min-w-[160px] h-9">
+                              <SelectTrigger className="w-full h-9">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -545,7 +545,7 @@ export function TicketDetailsModal({
                           </div>
 
                           {mode === "edit" && (
-                            <div className="flex flex-wrap items-center gap-2 pb-1.5">
+                            <div className="flex flex-wrap justify-center gap-2 pb-1.5 w-full">
                               {form.approvalState === "pending" ? (
                                 <>
                                   <Button type="button" variant="outline" size="default" onClick={onRejectPlan} className="h-9">

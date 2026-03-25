@@ -98,13 +98,31 @@ async function generatePlan(ticket, wid) {
   await sql`update tickets set execution_state='planning', updated_at=now() where id=${ticket.id}::uuid`;
   await writeActivity(ticket.id, "Planning", "Generating plan for approval.", "info");
 
+  // Fetch subtasks and comments for richer context
+  const [subtaskRows, commentRows] = await Promise.all([
+    sql`select title, completed from ticket_subtasks where ticket_id = ${ticket.id}::uuid order by position asc, created_at asc`,
+    sql`select content, author_name, created_at from ticket_comments where ticket_id = ${ticket.id}::uuid order by created_at asc limit 10`,
+  ]);
+
   const prompt = [
-    `Ticket: ${ticket.title}`,
-    ticket.description && `Description: ${ticket.description}`,
+    `## Ticket: ${ticket.title}`,
+    '',
+    ticket.description && `### Description`,
+    ticket.description || null,
+    '',
+    subtaskRows.length > 0 && `### Subtasks`,
+    subtaskRows.length > 0 ? subtaskRows.map((s, i) => `  ${i + 1}. [${s.completed ? 'x' : ' '}] ${s.title}`).join('\n') : null,
+    '',
+    commentRows.length > 0 && `### Notes / Comments`,
+    commentRows.length > 0
+      ? commentRows.map(c => `[${c.author_name}] ${new Date(c.created_at).toISOString().split('T')[0]}: ${c.content}`).join('\n')
+      : null,
+    '',
+    `### Metadata`,
     ticket.priority && `Priority: ${ticket.priority}`,
-    ticket.due_date && `Due: ${new Date(ticket.due_date).toISOString().split("T")[0]}`,
-    Array.isArray(ticket.tags) && ticket.tags.length ? `Tags: ${ticket.tags.join(", ")}` : null,
-    "",
+    ticket.due_date && `Due: ${new Date(ticket.due_date).toISOString().split('T')[0]}`,
+    Array.isArray(ticket.tags) && ticket.tags.length > 0 && `Tags: ${ticket.tags.join(', ')}`,
+    '',
     "Create an execution plan only.",
     "Do not execute anything.",
     "Return a concise numbered plan plus acceptance criteria."
@@ -173,18 +191,40 @@ async function executeTicket(ticket, boardId, wid) {
   await writeActivity(ticketId, "Picked up", "Worker picked up ticket.", "info");
   await sendTelegramMessage(ticket, `🚀 Starting execution of "${ticket.title}"`, chatIdForDelivery);
 
-  // Build prompt with all context
+  // Fetch subtasks and comments for richer context
+  const [subtaskRows, commentRows] = await Promise.all([
+    sql`select title, completed from ticket_subtasks where ticket_id = ${ticketId}::uuid order by position asc, created_at asc`,
+    sql`select content, author_name, created_at from ticket_comments where ticket_id = ${ticketId}::uuid order by created_at asc limit 20`,
+  ]);
+
+  // Build structured prompt with all ticket context
   const parts = [
-    `Ticket: ${ticket.title}`,
-    ticket.description && `Description: ${ticket.description}`,
-    ticket.plan_text && `Plan: ${ticket.plan_text}`,
-    ticket.checklist_total > 0 && `Checklist: ${ticket.checklist_done}/${ticket.checklist_total}`,
+    `## Ticket: ${ticket.title}`,
+    '',
+    ticket.description && `### Description`,
+    ticket.description || null,
+    '',
+    subtaskRows.length > 0 && `### Subtasks`,
+    subtaskRows.length > 0 ? subtaskRows.map((s, i) => `  ${i + 1}. [${s.completed ? 'x' : ' '}] ${s.title}`).join('\n') : null,
+    '',
+    commentRows.length > 0 && `### Notes / Comments`,
+    commentRows.length > 0
+      ? commentRows.map(c => `[${c.author_name}] ${new Date(c.created_at).toISOString().split('T')[0]}: ${c.content}`).join('\n')
+      : null,
+    '',
+    ticket.plan_text && `### Plan`,
+    ticket.plan_text || null,
+    '',
+    `### Metadata`,
     ticket.priority && `Priority: ${ticket.priority}`,
     ticket.due_date && `Due: ${new Date(ticket.due_date).toISOString().split('T')[0]}`,
-    Array.isArray(ticket.tags) && `Tags: ${ticket.tags.join(', ')}`,
+    Array.isArray(ticket.tags) && ticket.tags.length > 0 && `Tags: ${ticket.tags.join(', ')}`,
+    subtaskRows.length > 0 && `Subtask progress: ${subtaskRows.filter(s => s.completed).length}/${subtaskRows.length}`,
+    ticket.checklist_total > 0 && ticket.checklist_total !== subtaskRows.length && `Legacy checklist progress: ${ticket.checklist_done}/${ticket.checklist_total}`,
     '',
-    'Execute the above ticket. Report progress via activity tools and mark completion when done.'
+    'Execute the above ticket. Report progress via activity tools and mark completion when done.',
   ].filter(Boolean);
+
   const prompt = parts.join('\n');
 
   const args = ["agent", "--agent", agentId, "--message", prompt, "--json"];
