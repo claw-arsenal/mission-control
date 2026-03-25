@@ -364,10 +364,11 @@ mission-control/
 
 | Script | Purpose |
 |---|---|
-| `./scripts/mc-services.sh` | Service supervisor for all host-level daemons. `start` / `stop` / `restart` / `status` for task-worker, gateway-sync, bridge-logger. |
-| `./scripts/install.sh` | **Bootstrap install.** Clones repo (or pulls latest), generates `.env`, starts Docker DB, runs `npm install`, starts all host services, creates `/usr/local/bin/mc-*` shortcuts. |
-| `./scripts/update.sh` | **Update existing install.** Git pull, detects package.json changes, rebuilds Next.js, restarts host services via `mc-services.sh`. |
-| `./scripts/clean.sh` | **Fresh start.** Stops all services + Docker, removes volumes, re-pulls latest, re-initializes DB, restarts everything. |
+| `./scripts/mc-services.sh` | Service supervisor for all host-level daemons. `start` / `stop` / `restart` / `status` for task-worker, gateway-sync, bridge-logger, and Next.js. |
+| `./scripts/dev.sh` | Development mode launcher. Starts all services + Next.js dev server in foreground with hot-reload. Ctrl+C stops everything. |
+| `./scripts/install.sh` | **Bootstrap install.** Clones repo (or pulls latest), generates `.env`, starts Docker DB, runs `npm install`, builds production Next.js, starts all host services, creates `/usr/local/bin/mc-*` shortcuts. |
+| `./scripts/update.sh` | **Update existing install.** Git pull, detects changed files, rebuilds Next.js if needed, restarts host services. |
+| `./scripts/clean.sh` | **Fresh start.** Stops all services + Docker, removes volumes, re-pulls latest, re-initializes DB, rebuilds Next.js, restarts everything. |
 | `./scripts/uninstall.sh` | **Complete removal.** Stops all services, removes Docker volumes, deletes project dir, removes `mc-*` shortcuts. |
 | `./scripts/db-init.sh` | **DB schema init.** SQL schema + seed data. Run automatically on first start via `db-init` container. |
 
@@ -383,20 +384,20 @@ mission-control/
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Start Docker DB, start all host services (task-worker, gateway-sync, bridge-logger), then start Next.js dev server |
+| `npm run dev` | Alias for `bash dev.sh start` — starts dev mode with hot-reload |
 | `npm run dev:stop` | Stop Docker DB and all host services |
 | `npm run dev:db` | Start Docker DB only |
 | `npm run dev:services` | Start host services only (task-worker, gateway-sync, bridge-logger) |
 | `npm run build` | Build Next.js for production |
-| `npm run start` | Start production Next.js server |
+| `npm run start` | Start production Next.js server (used by mc-services) |
 | `npm run db:setup` | Run schema + seed SQL |
 | `npm run db:reset` | Drop all tables and re-run schema + seed |
 | `npm run bridge:logger` | Run bridge-logger directly (for debugging) |
 | `npm run worker:tasks` | Run task-worker directly (for debugging) |
 | `npm run bridge:logger:check` | Syntax-check bridge-logger.mjs |
 | `npm run worker:tasks:check` | Syntax-check task-worker.mjs |
-| `mc-services start` | Start task-worker, gateway-sync, bridge-logger as daemons |
-| `mc-services stop` | Stop all host daemon services |
+| `mc-services start` | Start all 4 host daemons: task-worker, gateway-sync, bridge-logger, Next.js |
+| `mc-services stop` | Stop all 4 host daemons |
 | `mc-services status` | Show service status + last log lines |
 
 ---
@@ -433,12 +434,12 @@ This clones the repo into `~/.openclaw/workspace/mission-control`, generates `.e
 
 **After install, shortcuts are available:**
 ```bash
-mc-services start   # start task-worker, gateway-sync, bridge-logger
+mc-services start   # start task-worker, gateway-sync, bridge-logger, Next.js
 mc-services stop    # stop all host services
 mc-services status  # check status + recent log lines
-mc-update          # pull latest + restart host services
+mc-update          # pull latest + rebuild + restart
 mc-clean           # reset containers + volumes + fresh start
-mc-uninstall       # remove everything
+bash dev.sh        # start dev mode (hot-reload, foreground, Ctrl+C to stop)
 ```
 
 ### Development
@@ -491,7 +492,7 @@ mc-services start
 
 ### Multi-queue workers
 
-Set `WORKER_QUEUE=high-priority` (or any name) in the task-worker environment when starting it. Tickets have a `queue_name` field defaulting to `default`. Workers only pick up tickets with matching queue names.
+Set `WORKER_QUEUE=high-priority` (or any name) when starting the task-worker. Tickets have a `queue_name` field defaulting to `default`. Workers only pick up tickets with matching queue names.
 
 ---
 

@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================
 # OpenClaw Mission Control — Service Supervisor
-# Manages task-worker, gateway-sync, and bridge-logger as
-# background daemons using simple PID files.
+# Manages all persistent services as background daemons.
 #
 # Usage:
-#   mc-services start     — start all three services
-#   mc-services stop      — stop all three services
+#   mc-services start     — start all services
+#   mc-services stop      — stop all services
 #   mc-services restart   — stop then start
-#   mc-services status    — show running status + last 5 log lines
+#   mc-services status    — show running status + recent log lines
 # ============================================================
 set -euo pipefail
 
@@ -18,24 +17,10 @@ RUNTIME_DIR="$PROJECT_ROOT/.runtime"
 PID_DIR="$RUNTIME_DIR/pids"
 LOG_DIR="$RUNTIME_DIR/logs"
 
-# Load .env if present
-if [ -f "$PROJECT_ROOT/.env" ]; then
-  set -a
-  source "$PROJECT_ROOT/.env"
-  set +a
-fi
-
-# Defaults
-DATABASE_URL="${DATABASE_URL:-postgresql://openclaw:${POSTGRES_PASSWORD}@127.0.0.1:5432/mission_control}"
-OPENCLAW_DATABASE_URL="${OPENCLAW_DATABASE_URL:-$DATABASE_URL}"
-OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}"
-OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
-OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
-
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
 # ── Service definitions ─────────────────────────────────────
-SERVICES="task-worker gateway-sync bridge-logger"
+SERVICES="task-worker gateway-sync bridge-logger nextjs"
 
 declare -A SERVICE_CMDS
 declare -A SERVICE_LOG_FILES
@@ -49,6 +34,7 @@ done
 SERVICE_CMDS[task-worker]="node scripts/task-worker.mjs"
 SERVICE_CMDS[gateway-sync]="node scripts/gateway-sync.mjs"
 SERVICE_CMDS[bridge-logger]="node scripts/bridge-logger.mjs"
+SERVICE_CMDS[nextjs]="bash -c 'npm start'"
 
 # ── Helpers ────────────────────────────────────────────────
 pid_running() {
@@ -70,7 +56,7 @@ start_service() {
   echo -n "  Starting $svc... "
   cd "$PROJECT_ROOT"
   (
-    exec ${cmd} >> "$log_file" 2>&1
+    exec bash -c "$cmd" >> "$log_file" 2>&1
   ) &
   local new_pid=$!
   echo "$new_pid" > "$pid_file"
@@ -120,10 +106,9 @@ status_service() {
 
   if pid_running "$(cat "$pid_file" 2>/dev/null)"; then
     echo "  $svc — RUNNING (pid $(cat "$pid_file"))"
-    [ -f "$log_file" ] && echo "    Last lines:" && tail -3 "$log_file" | sed 's/^/      /'
+    [ -f "$log_file" ] && echo "    Last:" && tail -2 "$log_file" | sed 's/^/      /'
   else
     echo "  $svc — STOPPED"
-    [ -f "$log_file" ] && tail -3 "$log_file" | grep -v "^$" | sed 's/^/    log: /' || true
   fi
 }
 

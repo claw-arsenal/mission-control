@@ -52,6 +52,19 @@ if [ "$NEED_NPM" = "yes" ]; then
   npm install 2>&1 | tail -3
 fi
 
+# ── Build if source files changed ─────────────────────────
+BUILD_CHANGED="no"
+if echo "$CHANGED" | grep -qE "src/|pages/|app/|next\.config\.|tailwind\.config\.|postcss\.|package\.json"; then
+  BUILD_CHANGED="yes"
+fi
+
+if [ "$BUILD_CHANGED" = "yes" ]; then
+  step "Source files changed — rebuilding Next.js ..."
+  npm run build 2>&1 | tail -5
+else
+  info "No source changes — skipping build."
+fi
+
 # ── Restart host services ────────────────────────────────────
 step "Restarting host services ..."
 bash scripts/mc-services.sh restart 2>&1 | sed 's/^/  /'

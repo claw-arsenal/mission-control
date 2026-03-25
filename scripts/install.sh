@@ -138,17 +138,24 @@ done
 echo ""
 info "Schema initialized."
 
-# ── npm install ──────────────────────────────────────────────
+# ── npm install + build ──────────────────────────────────────
 step "Installing npm dependencies ..."
 npm install 2>&1 | tail -3
 
+if [ ! -d ".next" ]; then
+  step "Building production Next.js ..."
+  npm run build 2>&1 | tail -5
+else
+  info "Production build already exists — skipping. Run 'npm run build' to rebuild."
+fi
+
 # ── mc-services: start host-level daemons ────────────────────
-step "Starting host-level services (task-worker, gateway-sync, bridge-logger) ..."
+step "Starting all services (task-worker, gateway-sync, bridge-logger, Next.js) ..."
 bash scripts/mc-services.sh start 2>&1 | sed 's/^/  /'
 
 # ── Convenience symlinks ─────────────────────────────────────
 step "Creating convenience symlinks in /usr/local/bin ..."
-for script in install clean update uninstall mc-services; do
+for script in install clean update uninstall mc-services dev; do
   symlink="/usr/local/bin/mc-${script}"
   source_file="$INSTALL_DIR/scripts/${script}.sh"
   if [ -f "$source_file" ]; then
@@ -166,17 +173,19 @@ echo "╚═══════════════════════�
 echo ""
 echo "Location: $INSTALL_DIR"
 echo ""
-echo "Services running:"
-echo "  PostgreSQL (Docker)  — port 5432"
-echo "  task-worker (host)   — executes agent tickets"
-echo "  gateway-sync (host)  — imports openclaw sessions"
-echo "  bridge-logger (host) — tails openclaw logs to DB"
+echo "Services running (production):"
+echo "  PostgreSQL (Docker)   — port 5432"
+echo "  task-worker (host)    — executes agent tickets"
+echo "  gateway-sync (host)   — imports openclaw sessions"
+echo "  bridge-logger (host)  — tails openclaw logs to DB"
+echo "  Next.js (host)        — production build, port 3000"
 echo ""
-echo "Next steps:"
-echo "  npm run dev          — start Next.js dev server"
-echo "  mc-services status   — check service status"
-echo "  mc-update           — pull latest + restart"
-echo "  mc-clean            — fresh start"
+echo "Commands:"
+echo "  mc-services stop      — stop all services"
+echo "  mc-services status    — check status"
+echo "  mc-update            — pull latest + rebuild + restart"
+echo "  mc-clean             — fresh start (destroys DB)"
+echo "  bash dev.sh           — start dev mode (hot-reload, foreground)"
 echo ""
 echo "Open: http://localhost:3000"
 echo ""
