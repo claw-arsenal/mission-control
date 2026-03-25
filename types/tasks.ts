@@ -15,7 +15,7 @@ export type TicketPriority = "low" | "medium" | "high" | "urgent";
 export type TicketExecutionState =
   | "open"
   | "planning"
-  | "awaiting_plan_approval"
+  | "awaiting_approval"
   | "ready_to_execute"
   | "executing"
   | "done"

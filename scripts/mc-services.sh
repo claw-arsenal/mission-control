@@ -19,6 +19,15 @@ LOG_DIR="$RUNTIME_DIR/logs"
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
+# ── Load .env if present ────────────────────────────────────
+ENV_FILE="$PROJECT_ROOT/.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
 # ── Service definitions ─────────────────────────────────────
 SERVICES="task-worker gateway-sync bridge-logger nextjs"
 
@@ -42,11 +51,32 @@ pid_running() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+kill_port() {
+  local port=$1
+  if command -v fuser >/dev/null 2>&1 && fuser "$port/tcp" >/dev/null 2>&1; then
+    fuser -k "$port/tcp" 2>/dev/null || true
+    sleep 1
+  fi
+}
+
 start_service() {
   local svc=$1
   local pid_file="${SERVICE_PIDS[$svc]}"
   local log_file="${SERVICE_LOG_FILES[$svc]}"
   local cmd="${SERVICE_CMDS[$svc]}"
+
+  # ── Pre-start cleanup ─────────────────────────────────────
+  # nextjs: kill anything holding its port and wait for release
+  if [ "$svc" = "nextjs" ]; then
+    if command -v fuser >/dev/null 2>&1; then
+      fuser -k 3000/tcp 2>/dev/null || true
+      # Wait up to 5s for port to be released
+      for i in $(seq 1 10); do
+        fuser 3000/tcp >/dev/null 2>&1 || break
+        sleep 0.5
+      done
+    fi
+  fi
 
   if pid_running "$(cat "$pid_file" 2>/dev/null)"; then
     echo "  $svc — already running (pid $(cat "$pid_file"))"
@@ -73,14 +103,11 @@ start_service() {
 stop_service() {
   local svc=$1
   local pid_file="${SERVICE_PIDS[$svc]}"
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null)" || true
 
-  if [ ! -f "$pid_file" ]; then
-    echo "  $svc — not running (no pid file)"
-    return 0
-  fi
-
-  local pid=$(cat "$pid_file")
-  if pid_running "$pid"; then
+  # Try PID file first; fall back to pkill if stale/missing
+  if [ -n "$pid" ] && pid_running "$pid"; then
     echo -n "  Stopping $svc (pid $pid)... "
     kill "$pid" 2>/dev/null
     local count=0
@@ -94,7 +121,22 @@ stop_service() {
     fi
     echo "stopped"
   else
-    echo "  $svc — not running (stale pid file)"
+    # Fallback: pkill by process name
+    case "$svc" in
+      task-worker)
+        pkill -f "task-worker.mjs" 2>/dev/null && echo "  $svc — killed via pkill" || echo "  $svc — not running"
+        ;;
+      gateway-sync)
+        pkill -f "gateway-sync.mjs" 2>/dev/null && echo "  $svc — killed via pkill" || echo "  $svc — not running"
+        ;;
+      bridge-logger)
+        pkill -f "bridge-logger.mjs" 2>/dev/null && echo "  $svc — killed via pkill" || echo "  $svc — not running"
+        ;;
+      nextjs)
+        kill_port 3000
+        echo "  $svc — port 3000 cleared"
+        ;;
+    esac
   fi
   rm -f "$pid_file"
 }

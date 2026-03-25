@@ -238,21 +238,18 @@ async function getWorkspaceId(sql) {
 }
 
 async function ensureAgent(sql, workspaceId, runtimeAgentId, model = "") {
-  const existing = await sql`
-    select id from agents where workspace_id=${workspaceId} and openclaw_agent_id=${runtimeAgentId} limit 1
-  `;
-  if (existing[0]?.id) {
-    if (model) {
-      await sql`update agents set model=${model}, updated_at=now(), last_heartbeat_at=now() where id=${existing[0].id}`;
-    }
-    return existing[0].id;
-  }
-  const inserted = await sql`
+  // Pure upsert — no race window between SELECT and INSERT
+  const result = await sql`
     insert into agents (workspace_id, openclaw_agent_id, status, model, last_heartbeat_at)
     values (${workspaceId}, ${runtimeAgentId}, 'running', ${model || null}, now())
+    on conflict (workspace_id, openclaw_agent_id) do update
+      set status = 'running',
+          model = coalesce(${model || null}, agents.model),
+          last_heartbeat_at = now(),
+          updated_at = now()
     returning id
   `;
-  return inserted[0]?.id;
+  return result[0]?.id;
 }
 
 async function insertLogRow(sql, row) {

@@ -143,7 +143,7 @@ const EXECUTION_STEPS: Array<{ key: TicketExecutionState; label: string }> = [
   { key: "open", label: "Open" },
   { key: "draft", label: "Draft" },
   { key: "planning", label: "Planning" },
-  { key: "awaiting_plan_approval", label: "Awaiting approval" },
+  { key: "awaiting_approval", label: "Awaiting approval" },
   { key: "ready_to_execute", label: "Ready" },
   { key: "executing", label: "Executing" },
   { key: "done", label: "Done" },

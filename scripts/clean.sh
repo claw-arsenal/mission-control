@@ -49,7 +49,7 @@ bash scripts/mc-services.sh stop 2>&1 | sed 's/^/  /' || true
 
 # ── Docker: stop + remove containers + volumes ────────────────
 step "Stopping Docker services ..."
-docker compose down --volumes 2>&1 | tail -3 || true
+docker compose down --volumes --remove-orphans 2>&1 | tail -3 || true
 
 # ── Pull latest ──────────────────────────────────────────────
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
@@ -85,9 +85,16 @@ done
 echo ""
 info "Schema initialized."
 
-# ── npm install ──────────────────────────────────────────────
+# ── npm install + build ─────────────────────────────────────
 step "Installing npm dependencies ..."
 npm install 2>&1 | tail -3
+
+if [ ! -d ".next" ]; then
+  step "Building production Next.js ..."
+  npm run build 2>&1 | tail -5
+else
+  info "Production build already exists — skipping. Run 'npm run build' to rebuild."
+fi
 
 # ── Restart host services ────────────────────────────────────
 step "Starting host services ..."
