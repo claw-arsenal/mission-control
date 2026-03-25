@@ -740,15 +740,52 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                   ) : boardActivity.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No board activity yet.</p>
                   ) : (
-                    boardActivity.slice(0, 10).map((entry) => (
-                      <div key={entry.id} className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+                    boardActivity.slice(0, 15).map((entry) => (
+                      <button
+                        key={entry.id}
+                        onClick={() => {
+                          if (entry.ticket_id) {
+                            tasks.openDetailsModal(entry.ticket_id);
+                            // Also highlight this ticket in the URL without full reload
+                            const next = new URLSearchParams(window.location.search);
+                            next.set("ticket", entry.ticket_id);
+                            window.history.replaceState(null, "", `?${next.toString()}`);
+                          }
+                        }}
+                        className="w-full rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-muted/30 cursor-pointer"
+                      >
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-medium">{entry.event}</p>
-                          <span className="text-[10px] text-muted-foreground">{entry.level}</span>
+                          <span
+                            className={cn(
+                              "inline-flex rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+                              entry.level === "success" && "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+                              entry.level === "error" && "bg-red-500/20 text-red-600 dark:text-red-400",
+                              entry.level === "warning" && "bg-amber-500/20 text-amber-600 dark:text-amber-400",
+                              entry.level === "info" && "bg-blue-500/20 text-blue-500",
+                            )}
+                          >
+                            {entry.event}
+                          </span>
+                          <span className="text-[9px] text-muted-foreground">
+                            {entry.occurred_at ? formatDateTimeUTC(entry.occurred_at) : ""}
+                          </span>
                         </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{entry.details || entry.ticket_title || "—"}</p>
-                        <p className="mt-1 text-[10px] text-muted-foreground">{entry.ticket_title ? `${entry.ticket_title} • ` : ""}{entry.occurred_at ? formatDateTimeUTC(entry.occurred_at) : ""}</p>
-                      </div>
+                        {entry.ticket_title && (
+                          <p className="mt-0.5 text-[11px] font-medium text-primary/80 truncate">
+                            {entry.ticket_title}
+                          </p>
+                        )}
+                        {entry.source && entry.source !== "Worker" && (
+                          <p className="mt-0.5 text-[9px] text-muted-foreground">
+                            via {entry.source}
+                          </p>
+                        )}
+                        {entry.details && (
+                          <p className="mt-1 text-[10px] text-muted-foreground/80 line-clamp-2 leading-relaxed">
+                            {entry.details}
+                          </p>
+                        )}
+                      </button>
                     ))
                   )}
                 </div>

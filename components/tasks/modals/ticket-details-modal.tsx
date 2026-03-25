@@ -281,7 +281,10 @@ export function TicketDetailsModal({
     const source = String(entry.source || "").toLowerCase();
 
     if (activityFilter === "execution") {
-      return event.startsWith("ticket.") || details.includes("execution") || source === "agent";
+      return event.startsWith("ticket.") || event === "agent response" || event === "agent error"
+        || event.includes("plan") || event.includes("execute") || event.includes("pickup")
+        || event.includes("complete") || event.includes("fail") || event.includes("retry")
+        || event.includes("approve") || event.includes("reject");
     }
 
     if (activityFilter === "comments") {
@@ -962,41 +965,73 @@ export function TicketDetailsModal({
                             {filteredActivity.length === 0 ? (
                               <p className="text-xs text-muted-foreground">No activity for this filter.</p>
                             ) : null}
-                            {filteredActivity.map((entry) => (
-                            <div
-                              key={entry.id}
-                              className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5"
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={cn(
-                                      "inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                                      entry.level === "success" && "bg-emerald-500/15 text-emerald-400",
-                                      entry.level === "warning" && "bg-amber-500/15 text-amber-400",
-                                      entry.level === "error" && "bg-destructive/15 text-destructive",
-                                      entry.level === "info" && "bg-blue-500/15 text-blue-400",
+                            {filteredActivity.map((entry) => {
+                              const isAgentResponse = entry.event === "Agent response" || entry.event === "Agent error";
+                              const isPlanGenerated = entry.event === "Plan generated";
+                              return (
+                              <div
+                                key={entry.id}
+                                className={cn(
+                                  "rounded-xl border px-3 py-2.5",
+                                  isAgentResponse && entry.level === "info"
+                                    ? "border-primary/30 bg-primary/5"
+                                    : "border-border/70 bg-muted/20"
+                                )}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {isAgentResponse ? (
+                                      <span className="inline-flex items-center gap-1 rounded-md bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                                        🤖 {entry.source || "Agent"}
+                                      </span>
+                                    ) : isPlanGenerated ? (
+                                      <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400">
+                                        📝 Planner
+                                      </span>
+                                    ) : (
+                                      <span
+                                        className={cn(
+                                          "inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                                          entry.level === "success" && "bg-emerald-500/15 text-emerald-400",
+                                          entry.level === "warning" && "bg-amber-500/15 text-amber-400",
+                                          entry.level === "error" && "bg-destructive/15 text-destructive",
+                                          entry.level === "info" && "bg-blue-500/15 text-blue-400",
+                                        )}
+                                      >
+                                        {entry.event}
+                                      </span>
                                     )}
-                                  >
-                                    {entry.level}
+                                    {!isAgentResponse && !isPlanGenerated && (
+                                      <p className="text-sm font-medium">{entry.event}</p>
+                                    )}
+                                    {entry.source && !isAgentResponse && (
+                                      <span className="text-[10px] text-muted-foreground">via {entry.source}</span>
+                                    )}
+                                  </div>
+                                  <span className="text-xs text-muted-foreground">
+                                    {formatActivityDate(entry.occurredAt)}
                                   </span>
-                                  <p className="text-sm font-medium">{entry.event}</p>
                                 </div>
-                                <span className="text-xs text-muted-foreground">
-                                  {formatActivityDate(entry.occurredAt)}
-                                </span>
+
+                                {isAgentResponse && entry.details && (
+                                  <div className="mt-2 rounded-md border border-primary/20 bg-background/90 px-3 py-2">
+                                    <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/90">
+                                      {entry.details}
+                                    </p>
+                                  </div>
+                                )}
+
+                                {!isAgentResponse && (entry.details || entry.source) && (
+                                  <div className="mt-1 rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                                    <p className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Details</p>
+                                    <p className="max-h-28 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/90">
+                                      {entry.details}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
-                              {(entry.details || entry.source) && (
-                                <div className="mt-1 rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
-                                  <p className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Details</p>
-                                  <p className="max-h-28 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/90">
-                                    {entry.details}
-                                    {entry.source ? `\nsource: ${entry.source}` : ""}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                            ))}
+                            );
+                            })}
                           </div>
                         </ScrollArea>
                       </>

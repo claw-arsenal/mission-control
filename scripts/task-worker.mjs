@@ -142,6 +142,14 @@ async function generatePlan(ticket, wid) {
     const payloads = result?.payloads ?? [];
     const planText = payloads.map(p => p.text ?? '').join('\n').trim() || result?.text || result?.reply || JSON.stringify(result);
 
+    // Write the generated plan to ticket activity
+    await sql`
+      insert into ticket_activity (ticket_id, source, event, details, level)
+      values (${ticket.id}::uuid, 'planner', 'Plan generated', ${planText}, 'info')
+    `;
+    const insertedPlan = await sql`select id::text from ticket_activity where ticket_id = ${ticket.id}::uuid order by occurred_at desc limit 1`;
+    if (insertedPlan[0]?.id) await sql`select pg_notify('ticket_activity', ${insertedPlan[0].id})`;
+
     await sql`update tickets set plan_text=${planText}, approval_state='pending', execution_state='awaiting_approval', plan_generated_at=now(), updated_at=now() where id=${ticket.id}::uuid`;
     await writeActivity(ticket.id, "Plan ready", "Waiting for user approval.", "info");
     await sendTelegramMessage(ticket, `Plan ready for "${ticket.title}"\n\n${planText}\n\nApprove in Mission Control to start execution.`, chatId);
@@ -241,6 +249,23 @@ async function executeTicket(ticket, boardId, wid) {
     const payloads = result.result?.payloads ?? [];
     const responseText = payloads.map(p => p.text ?? '').join('\n').trim();
 
+    // Write agent's full response to the ticket's activity log so it's visible in the UI
+    if (responseText) {
+      await sql`
+        insert into ticket_activity (ticket_id, source, event, details, level)
+        values (
+          ${ticketId}::uuid,
+          ${agentId},
+          'Agent response',
+          ${responseText},
+          'info'
+        )
+      `;
+      // Notify any open ticket details modals
+      const inserted = await sql`select id::text from ticket_activity where ticket_id = ${ticketId}::uuid order by occurred_at desc limit 1`;
+      if (inserted[0]?.id) await sql`select pg_notify('ticket_activity', ${inserted[0].id})`;
+    }
+
     if (chatIdForDelivery && responseText) {
       await sendTelegramMessage(ticket, responseText, chatIdForDelivery);
     }
@@ -252,11 +277,15 @@ async function executeTicket(ticket, boardId, wid) {
     } else {
       await sql`update tickets set execution_state='done', updated_at=now() where id=${ticketId}::uuid`;
     }
-    await writeActivity(ticketId, "Completed", "Agent executed successfully.", "success");
+    await writeActivity(ticketId, "Completed", `Agent "${agentId}" completed successfully.`, "success");
     await sendTelegramMessage(ticket, `✅ Ticket "${ticket.title}" completed.`, chatIdForDelivery);
   } else {
+    await sql`
+      insert into ticket_activity (ticket_id, source, event, details, level)
+      values (${ticketId}::uuid, ${agentId}, 'Agent error', ${result.error}, 'error')
+    `;
     await sql`update tickets set execution_state='failed', updated_at=now() where id=${ticketId}::uuid`;
-    await writeActivity(ticketId, "Failed", `Agent execution failed: ${result.error}`, "error");
+    await writeActivity(ticketId, "Failed", `Agent "${agentId}" failed: ${result.error}`, "error");
     await sendTelegramMessage(ticket, `❌ Ticket "${ticket.title}" failed: ${result.error}`, chatIdForDelivery);
   }
 }
