@@ -106,13 +106,16 @@ async function run() {
     const occurrences = await expandOccurrences(event, from, to);
 
     for (const scheduledFor of occurrences) {
-      // Upsert occurrence
-      const [occ] = await sql`
+      // Insert occurrence (skip if already exists — never overwrite status)
+      await sql`
         insert into agenda_occurrences (agenda_event_id, scheduled_for, status)
         values (${event.id}, ${scheduledFor}, 'scheduled')
-        on conflict (agenda_event_id, scheduled_for) do update
-          set status = agenda_occurrences.status
-        returning id, status
+        on conflict (agenda_event_id, scheduled_for) do nothing
+      `;
+
+      const [occ] = await sql`
+        select id, status from agenda_occurrences
+        where agenda_event_id = ${event.id} and scheduled_for = ${scheduledFor}
       `;
 
       if (occ && occ.status === "scheduled") {

@@ -149,14 +149,6 @@ export type CreateTicketForm = {
   assignedAgentId: string;
   executionMode: TicketExecutionMode;
   processVersionIds: string[];
-  taskType: TaskType;
-  frequency: Frequency;
-  weekdays: string[];
-  startTime: string;
-  startDateMode: string;
-  endDateMode: string;
-  endDate: string;
-  modelOverride: string;
 };
 
 export type TicketDetailsForm = {

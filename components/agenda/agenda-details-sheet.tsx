@@ -38,6 +38,9 @@ import {
   IconProgressCheck,
   IconPencil,
   IconTrendingUp,
+  IconDownload,
+  IconPhoto,
+  IconFile,
 } from "@tabler/icons-react";
 
 
@@ -73,6 +76,13 @@ type RunAttempt = {
   error_message: string | null;
 };
 
+type ArtifactFile = {
+  name: string;
+  mimeType: string;
+  size: number;
+  path: string;
+};
+
 type RunStep = {
   id: string;
   run_attempt_id: string;
@@ -84,6 +94,7 @@ type RunStep = {
   started_at: string | null;
   finished_at: string | null;
   output_payload: string | null;
+  artifact_payload: { files: ArtifactFile[] } | null;
   error_message: string | null;
 };
 
@@ -135,6 +146,74 @@ function AgentOutput({ outputPayload }: { outputPayload: string | null }) {
   return (
     <div className="rounded-lg border bg-muted/40 p-4">
       <pre className="text-sm whitespace-pre-wrap font-mono leading-relaxed">{cleaned}</pre>
+    </div>
+  );
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function ArtifactFiles({ stepId, files }: { stepId: string; files: ArtifactFile[] }) {
+  if (!files || files.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2 mt-3">
+      <p className="text-xs font-semibold text-foreground/80 flex items-center gap-1.5">
+        <IconFile className="size-3 text-primary" />
+        Artifacts ({files.length})
+      </p>
+      <div className="grid grid-cols-1 gap-2">
+        {files.map((file) => {
+          const isImage = file.mimeType?.startsWith("image/");
+          const downloadUrl = `/api/agenda/artifacts/${stepId}/${encodeURIComponent(file.name)}`;
+
+          return (
+            <div
+              key={file.name}
+              className="flex items-center gap-3 rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40"
+            >
+              <div className="flex items-center justify-center size-10 rounded-lg bg-primary/10 shrink-0">
+                {isImage ? (
+                  <IconPhoto className="size-5 text-primary" />
+                ) : (
+                  <IconFile className="size-5 text-primary" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{file.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {file.mimeType} · {formatBytes(file.size)}
+                </p>
+              </div>
+              <a
+                href={downloadUrl}
+                download={file.name}
+                className="shrink-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs cursor-pointer">
+                  <IconDownload className="size-3" />
+                  Download
+                </Button>
+              </a>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Inline image preview for image artifacts */}
+      {files.filter((f) => f.mimeType?.startsWith("image/")).map((file) => (
+        <div key={`preview-${file.name}`} className="rounded-lg border overflow-hidden bg-muted/10">
+          <img
+            src={`/api/agenda/artifacts/${stepId}/${encodeURIComponent(file.name)}`}
+            alt={file.name}
+            className="max-h-[300px] w-full object-contain"
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -265,11 +344,12 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                   </Button>
                   <Button
                     size="sm"
-                    variant="ghost"
-                    className="gap-1.5 h-8 text-xs font-semibold text-destructive/70 hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                    variant="destructive"
+                    className="gap-1.5 h-8 text-xs font-semibold cursor-pointer"
                     onClick={() => setDeleteDialogOpen(true)}
                   >
                     <IconX className="size-3" />
+                    Delete
                   </Button>
                 </div>
               </div>
@@ -523,6 +603,9 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                         ) : (
                           <p className="text-sm text-muted-foreground">No output available</p>
                         )}
+                        {step.artifact_payload?.files && step.artifact_payload.files.length > 0 && (
+                          <ArtifactFiles stepId={step.id} files={step.artifact_payload.files} />
+                        )}
                       </CardContent>
                     </Card>
                   ))
@@ -533,20 +616,25 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
         </SheetContent>
       </Sheet>
 
-      {/* Delete confirmation */}
+      {/* Delete confirmation — rendered at portal root to avoid Sheet z-index issues */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="z-[60]">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this event?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete &ldquo;{event.title}&rdquo; and all its occurrence history. This action cannot be undone.
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <IconX className="size-4" />
+              Delete this event?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm">
+              {isRecurring
+                ? `This will permanently delete "${event.title}" and ALL its occurrences (past and future). This cannot be undone.`
+                : `This will permanently delete "${event.title}" and its run history. This cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => { onDelete(event.id); setDeleteDialogOpen(false); onClose(); }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 cursor-pointer"
             >
               Delete event
             </AlertDialogAction>

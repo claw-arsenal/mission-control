@@ -11,38 +11,44 @@ type SkillInfo = {
 
 export async function GET() {
   try {
-    // Try to read installed skills from openclaw config
     const homeDir = process.env.HOME || "/home/clawdbot";
-    const openclawDir = resolve(homeDir, ".openclaw");
-
-    // Read skills from openclaw extensions directory
-    const extensionsDir = resolve(openclawDir, "extensions");
     const skills: SkillInfo[] = [];
 
-    if (existsSync(extensionsDir)) {
+    // Read skills from workspace skills and managed skills directories
+    const skillsDirs = [
+      resolve(homeDir, ".openclaw/workspace/skills"),
+      resolve(homeDir, ".openclaw/skills"),
+    ];
+
+    for (const dir of skillsDirs) {
+      if (!existsSync(dir)) continue;
       const { readdirSync } = await import("fs");
       try {
-        const entries = readdirSync(extensionsDir, { withFileTypes: true });
+        const entries = readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.isDirectory()) {
-            const skillKey = entry.name;
-            const pkgPath = resolve(extensionsDir, skillKey, "package.json");
-            if (existsSync(pkgPath)) {
-              try {
-                const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-                skills.push({
-                  key: skillKey,
-                  name: pkg.name || skillKey,
-                  description: pkg.description || "",
-                });
-              } catch {
-                skills.push({ key: skillKey, name: skillKey, description: "" });
-              }
+          if (!entry.isDirectory()) continue;
+          const skillKey = entry.name;
+          if (skills.find((s) => s.key === skillKey)) continue; // dedup
+          const skillMdPath = resolve(dir, skillKey, "SKILL.md");
+          if (!existsSync(skillMdPath)) continue;
+          try {
+            const content = readFileSync(skillMdPath, "utf8");
+            const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+            let name = skillKey;
+            let description = "";
+            if (fmMatch) {
+              const nameMatch = fmMatch[1].match(/^name:\s*(.+)$/m);
+              const descMatch = fmMatch[1].match(/^description:\s*(.+)$/m);
+              if (nameMatch) name = nameMatch[1].trim();
+              if (descMatch) description = descMatch[1].trim();
             }
+            skills.push({ key: skillKey, name, description });
+          } catch {
+            skills.push({ key: skillKey, name: skillKey, description: "" });
           }
         }
       } catch {
-        // Extensions dir not readable
+        // Dir not readable
       }
     }
 

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSql } from "@/lib/local-db";
-import { enqueueTicket } from "@/lib/tasks/ticket-queue";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- action-based route with validated body fields */
 type Json = Record<string, any>;
@@ -229,13 +228,8 @@ export async function POST(request: Request) {
       const created = rows[0];
       if (created?.id) {
         await logTaskAudit(sql, wid, { event: 'Ticket created', details: created.title || title, level: 'success', ticketId: created.id });
-        // Auto-enqueue if agent assigned
-        if (created.assigned_agent_id && created.execution_state === 'open') {
-          await sql`update tickets set execution_state='queued', updated_at=now() where id=${created.id}`;
-          created.execution_state = 'queued';
-          await enqueueTicket(created.id);
-          await sql`select pg_notify('ticket_ready', ${created.id}::text)`;
-        } else if (created.execution_state === 'queued' || created.execution_state === 'ready_to_execute') {
+        // Only notify if already queued (e.g. plan-approved ticket being re-created)
+        if (created.execution_state === 'queued' || created.execution_state === 'ready_to_execute') {
           await sql`select pg_notify('ticket_ready', ${created.id}::text)`;
         }
       }
@@ -308,13 +302,6 @@ export async function POST(request: Request) {
             level: updated.plan_approved ? 'success' : 'warning',
             ticketId: updated.id,
           });
-        }
-        // Auto-enqueue if agent was just assigned and state is still open
-        if (updated.assigned_agent_id && updated.execution_state === 'open' && (!before.assigned_agent_id || before.assigned_agent_id !== updated.assigned_agent_id)) {
-          await sql`update tickets set execution_state='queued', updated_at=now() where id=${ticketId}`;
-          updated.execution_state = 'queued';
-          await enqueueTicket(ticketId);
-          await logTaskAudit(sql, wid, { event: 'Auto-queued', details: `Agent ${updated.assigned_agent_id} assigned, auto-queued for execution.`, level: 'info', ticketId: updated.id });
         }
       }
       return ok({ ticket: updated });
@@ -635,8 +622,25 @@ export async function POST(request: Request) {
       if (!ticket.assigned_agent_id) return fail("No agent assigned to this ticket.");
 
       await sql`update tickets set execution_state='queued', updated_at=now() where id=${ticketId}`;
-      await enqueueTicket(ticketId);
+      await sql`select pg_notify('ticket_ready', ${ticketId}::text)`;
       await logTaskAudit(sql, wid, { event: 'Execution started', details: `Queued for agent ${ticket.assigned_agent_id}`, level: 'info', ticketId });
+
+      const updated = await sql`select * from tickets where id=${ticketId} limit 1`;
+      return ok({ ticket: updated[0] });
+    }
+
+    if (action === "retryExecution") {
+      const ticketId = String(body.ticketId || "");
+      if (!ticketId) return fail("Ticket id is required.");
+
+      const rows = await sql`select * from tickets where id=${ticketId} limit 1`;
+      const ticket = rows[0];
+      if (!ticket) return fail("Ticket not found.", 404);
+      if (!ticket.assigned_agent_id) return fail("No agent assigned to this ticket.");
+
+      await sql`update tickets set execution_state='queued', updated_at=now() where id=${ticketId}`;
+      await sql`select pg_notify('ticket_ready', ${ticketId}::text)`;
+      await logTaskAudit(sql, wid, { event: 'Retry requested', details: `Re-queued for agent ${ticket.assigned_agent_id}`, level: 'warning', ticketId });
 
       const updated = await sql`select * from tickets where id=${ticketId} limit 1`;
       return ok({ ticket: updated[0] });

@@ -318,6 +318,52 @@ function WeekView({
           {weekDays.map((day) => {
             const dateStr = format(day, "yyyy-MM-dd");
             const dayEvts = events.filter((e) => e.date === dateStr);
+
+            // Group overlapping events: sort by time, detect collisions, assign columns
+            const positioned = dayEvts
+              .filter((e) => !!e.time)
+              .map((evt) => {
+                const [hour, minute] = evt.time!.split(":").map(Number);
+                const topMin = hour * 60 + minute;
+                return { evt, topMin };
+              })
+              .sort((a, b) => a.topMin - b.topMin);
+
+            // Assign overlap groups — events within 30min of each other overlap
+            const OVERLAP_THRESHOLD = 30; // minutes
+            const layout: { evt: CalendarEvent; topPx: number; col: number; totalCols: number }[] = [];
+            let groupStart = 0;
+            for (let i = 0; i <= positioned.length; i++) {
+              const isEnd = i === positioned.length;
+              const gapTooLarge = !isEnd && i > groupStart && positioned[i].topMin - positioned[i - 1].topMin >= OVERLAP_THRESHOLD;
+              if (isEnd || gapTooLarge) {
+                const group = positioned.slice(groupStart, isEnd ? i : i);
+                const totalCols = group.length;
+                group.forEach((item, col) => {
+                  layout.push({
+                    evt: item.evt,
+                    topPx: (item.topMin / 60) * 48,
+                    col,
+                    totalCols,
+                  });
+                });
+                groupStart = isEnd ? i : i;
+              }
+            }
+            // Handle last group if gapTooLarge ended the loop early
+            if (groupStart < positioned.length) {
+              const group = positioned.slice(groupStart);
+              const totalCols = group.length;
+              group.forEach((item, col) => {
+                layout.push({
+                  evt: item.evt,
+                  topPx: (item.topMin / 60) * 48,
+                  col,
+                  totalCols,
+                });
+              });
+            }
+
             return (
               <div
                 key={day.toISOString()}
@@ -329,16 +375,21 @@ function WeekView({
                 {HOURS.map((h) => (
                   <div key={h} className="h-12 border-b border-dashed border-border/30" />
                 ))}
-                {dayEvts.map((evt) => {
-                  if (!evt.time) return null;
-                  const [hour, minute] = evt.time.split(":").map(Number);
-                  const top = (hour + minute / 60) * 48;
+                {layout.map(({ evt, topPx, col, totalCols }) => {
+                  const widthPct = totalCols > 1 ? `${100 / totalCols}%` : undefined;
+                  const leftPct = totalCols > 1 ? `${(col * 100) / totalCols}%` : undefined;
                   return (
                     <div
                       key={evt.id}
                       onClick={(e) => { e.stopPropagation(); onEventClick(evt); }}
-                      className="absolute left-0.5 right-0.5 z-[5]"
-                      style={{ top: `${top}px` }}
+                      className={[
+                        "absolute z-[5]",
+                        totalCols <= 1 ? "left-0.5 right-0.5" : "",
+                      ].join(" ")}
+                      style={{
+                        top: `${topPx}px`,
+                        ...(totalCols > 1 ? { left: leftPct, width: widthPct, paddingLeft: 1, paddingRight: 1 } : {}),
+                      }}
                     >
                       <EventPill event={evt} />
                     </div>

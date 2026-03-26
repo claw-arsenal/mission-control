@@ -45,6 +45,7 @@ export async function GET(
         ars.skill_key,
         ars.input_payload,
         ars.output_payload,
+        ars.artifact_payload,
         ars.status,
         ars.started_at,
         ars.finished_at,

@@ -4,14 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -73,7 +66,9 @@ export function ProcessesPageClient() {
           skillKey: s.skill_key ?? "",
           agentId: s.agent_id ?? "",
           timeoutSeconds: s.timeout_seconds,
+          modelOverride: s.model_override ?? "",
         })),
+        versionLabel: detail.version_label || "",
       });
     } else {
       setEditingInitialData(undefined);
@@ -132,80 +127,63 @@ export function ProcessesPageClient() {
           </Button>
         </div>
       ) : (
-        <div className="rounded-xl border overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/30 hover:bg-muted/30">
-                <TableHead className="font-semibold">Name</TableHead>
-                <TableHead className="font-semibold">Description</TableHead>
-                <TableHead className="font-semibold text-center w-24">Steps</TableHead>
-                <TableHead className="font-semibold text-center w-24">Version</TableHead>
-                <TableHead className="font-semibold text-right w-32">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {processes.map((p) => (
-                <TableRow
-                  key={p.id}
-                  className="cursor-pointer hover:bg-muted/40 transition-colors"
-                  onClick={() => handleEdit(p.id)}
-                >
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <IconStack2 className="size-4 text-primary shrink-0" />
-                      <span className="font-medium">{p.name}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-sm text-muted-foreground line-clamp-1">
-                      {p.description || "—"}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <Badge variant="secondary" className="tabular-nums">
-                      {p.step_count}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <span className="text-sm text-muted-foreground tabular-nums">
-                      v{p.version_number ?? 1}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-7 cursor-pointer"
-                        onClick={() => handleEdit(p.id)}
-                        title="Edit"
-                      >
-                        <IconPencil className="size-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-7 cursor-pointer"
-                        onClick={() => handleDuplicate(p.id)}
-                        title="Duplicate"
-                      >
-                        <IconCopy className="size-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-7 text-destructive/70 hover:text-destructive cursor-pointer"
-                        onClick={() => handleDeleteClick(p.id, p.name)}
-                        title="Delete"
-                      >
-                        <IconTrash className="size-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {processes.map((p) => (
+            <Card
+              key={p.id}
+              className="cursor-pointer hover:border-primary/40 transition-colors group"
+              onClick={() => handleEdit(p.id)}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <IconStack2 className="size-4 text-primary shrink-0" />
+                    <span className="font-semibold text-sm truncate">{p.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 cursor-pointer"
+                      onClick={() => handleEdit(p.id)}
+                      title="Edit"
+                    >
+                      <IconPencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 cursor-pointer"
+                      onClick={() => handleDuplicate(p.id)}
+                      title="Duplicate"
+                    >
+                      <IconCopy className="size-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 text-destructive/70 hover:text-destructive cursor-pointer"
+                      onClick={() => handleDeleteClick(p.id, p.name)}
+                      title="Delete"
+                    >
+                      <IconTrash className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground line-clamp-2 mt-1 pl-6">
+                  {p.description || "No description"}
+                </p>
+              </CardHeader>
+              <CardContent className="pt-0 flex items-center justify-between">
+                <Badge variant="secondary" className="tabular-nums text-xs">
+                  {p.step_count} {p.step_count === 1 ? "step" : "steps"}
+                </Badge>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  v{p.version_number ?? 1}
+                </span>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 

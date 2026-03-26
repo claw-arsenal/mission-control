@@ -43,6 +43,7 @@ import {
   SearchIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
+import { BoardActivityFeed, type LiveLog } from "@/components/tasks/boards/board-activity-feed";
 
 // UTC date formatting to avoid hydration mismatches
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -81,15 +82,11 @@ const VIEW_OPTIONS: Array<{ key: ViewMode; label: string }> = [
   { key: "grid", label: "Grid" },
 ];
 
-type LiveLog = {
+type ProcessOption = {
   id: string;
-  ticket_id?: string;
-  ticket_title?: string;
-  source?: string;
-  event?: string;
-  details?: string;
-  level?: string;
-  occurred_at?: string;
+  name: string;
+  versionId: string;
+  versionNumber: number;
 };
 
 type Props = {
@@ -104,37 +101,60 @@ type Props = {
 };
 
 export function BoardsPageClient({ initialBoardId, initialBoards, initialAssignees, sidebarUser }: Props) {
-  // Client-side assignee loading — runtime agents are loaded from openclaw CLI
-  // to avoid blocking SSR (which uses execFileSync).
+  // Client-side assignee loading — fetch from /api/agents for live runtime agents
   const [runtimeAssignees, setRuntimeAssignees] = useState<Assignee[]>(initialAssignees);
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
+    void (async () => {
       try {
-        const { execFile } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const { stdout } = await promisify(execFile)("openclaw", ["sessions", "--all-agents", "--json"], { timeout: 8000 });
-        const sessions: any[] = JSON.parse(stdout);
-        if (cancelled) return;
-        const assignees: Assignee[] = sessions
-          .filter((s: any) => s?.agentId)
-          .map((s: any) => ({
-            id: s.agentId,
-            name: s.identity?.name || s.name || s.agentId,
-            initials: ((s.identity?.name || s.name || s.agentId) as string).split(/\s+/).filter(Boolean).slice(0, 2).map((p: string) => p[0]?.toUpperCase() || "").join("") || s.agentId.slice(0, 2).toUpperCase(),
+        const res = await fetch("/api/agents", { cache: "reload" });
+        const json = await res.json();
+        if (!cancelled && json.agents) {
+          setRuntimeAssignees(json.agents.map((a: any) => ({
+            id: a.id,
+            name: a.name || a.id,
+            initials: (a.name || a.id).split(/\s+/).filter(Boolean).slice(0, 2).map((p: string) => p[0]?.toUpperCase() || "").join("") || "AG",
             color: "#64748b",
             source: "runtime" as const,
-          }));
-        if (!cancelled) setRuntimeAssignees(assignees);
-      } catch {
-        // fall back to empty assignees
-      }
-    };
-    void load();
+          })));
+        }
+      } catch { /* ignore load errors */ }
+    })();
     return () => { cancelled = true; };
   }, []);
 
   const tasks = useTasks({ initialBoardId, initialBoards, initialAssignees: runtimeAssignees });
+  const [processes, setProcesses] = useState<ProcessOption[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "listProcesses" }),
+        });
+        const json = await res.json();
+        if (!cancelled && json.ok && Array.isArray(json.rows)) {
+          const opts: ProcessOption[] = [];
+          const seen = new Set<string>();
+          for (const row of json.rows) {
+            if (!row.version_id || seen.has(row.version_id)) continue;
+            seen.add(row.version_id);
+            opts.push({
+              id: row.id,
+              name: row.name,
+              versionId: row.version_id,
+              versionNumber: row.version_number ?? 1,
+            });
+          }
+          setProcesses(opts);
+        }
+      } catch { /* ignore load errors */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const router = useRouter();
   const searchParams = useSearchParams();
   const [boardSearch, setBoardSearch] = useState("");
@@ -181,6 +201,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
       planText: "",
       planApproved: false,
       executionState: "open",
+      processVersionIds: tasks.createForm.processVersionIds || [],
       checklistDone: 0,
       checklistTotal: 0,
       comments: 0,
@@ -521,18 +542,10 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                   </DropdownMenu>
                 </>
               ) : (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="gap-1.5" id="add-board-dropdown-trigger">
-                      <PlusIcon className="h-4 w-4" />
-                      Add board
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuItem onClick={tasks.openCreateBoardModal}>Create board</DropdownMenuItem>
-                    <DropdownMenuItem onClick={tasks.openCreateListModal}>Create list</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <Button variant="outline" size="sm" className="gap-1.5 cursor-pointer" onClick={tasks.openCreateBoardModal}>
+                  <PlusIcon className="h-4 w-4" />
+                  Add board
+                </Button>
               )}
             </div>
           </div>
@@ -730,65 +743,16 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
               </div>
 
               <aside className="hidden min-h-0 overflow-hidden rounded-lg border border-border/60 bg-background/70 p-3 lg:flex lg:flex-col">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Board activity</h3>
-                  <span className="text-[10px] text-muted-foreground">Live feed</span>
-                </div>
-                <div className="space-y-2 overflow-auto">
-                  {boardActivityLoading && boardActivity.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">Loading activity...</p>
-                  ) : boardActivity.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No board activity yet.</p>
-                  ) : (
-                    boardActivity.slice(0, 15).map((entry) => (
-                      <button
-                        key={entry.id}
-                        onClick={() => {
-                          if (entry.ticket_id) {
-                            tasks.openDetailsModal(entry.ticket_id);
-                            // Also highlight this ticket in the URL without full reload
-                            const next = new URLSearchParams(window.location.search);
-                            next.set("ticket", entry.ticket_id);
-                            window.history.replaceState(null, "", `?${next.toString()}`);
-                          }
-                        }}
-                        className="w-full rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-muted/30 cursor-pointer"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={cn(
-                              "inline-flex rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
-                              entry.level === "success" && "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400",
-                              entry.level === "error" && "bg-red-500/20 text-red-600 dark:text-red-400",
-                              entry.level === "warning" && "bg-amber-500/20 text-amber-600 dark:text-amber-400",
-                              entry.level === "info" && "bg-blue-500/20 text-blue-500",
-                            )}
-                          >
-                            {entry.event}
-                          </span>
-                          <span className="text-[9px] text-muted-foreground">
-                            {entry.occurred_at ? formatDateTimeUTC(entry.occurred_at) : ""}
-                          </span>
-                        </div>
-                        {entry.ticket_title && (
-                          <p className="mt-0.5 text-[11px] font-medium text-primary/80 truncate">
-                            {entry.ticket_title}
-                          </p>
-                        )}
-                        {entry.source && entry.source !== "Worker" && (
-                          <p className="mt-0.5 text-[9px] text-muted-foreground">
-                            via {entry.source}
-                          </p>
-                        )}
-                        {entry.details && (
-                          <p className="mt-1 text-[10px] text-muted-foreground/80 line-clamp-2 leading-relaxed">
-                            {entry.details}
-                          </p>
-                        )}
-                      </button>
-                    ))
-                  )}
-                </div>
+                <BoardActivityFeed
+                  activity={boardActivity}
+                  loading={boardActivityLoading}
+                  onTicketClick={(ticketId) => {
+                    tasks.openDetailsModal(ticketId);
+                    const next = new URLSearchParams(window.location.search);
+                    next.set("ticket", ticketId);
+                    window.history.replaceState(null, "", `?${next.toString()}`);
+                  }}
+                />
               </aside>
             </div>
           </div>
@@ -801,6 +765,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
         form={createTicketForm}
         board={tasks.board}
         assignees={tasks.assignees}
+        processes={processes}
         attachments={[]}
         attachmentsLoading={false}
         attachmentsUploading={false}
@@ -832,6 +797,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
             assigneeIds: patch.assigneeIds ?? prev.assigneeIds,
             assignedAgentId: patch.assignedAgentId ?? prev.assignedAgentId,
             executionMode: patch.executionMode ?? prev.executionMode,
+            processVersionIds: patch.processVersionIds ?? prev.processVersionIds,
           }))
         }
         onUploadAttachments={() => {}}
@@ -886,6 +852,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
               form={detailsForm}
               board={tasks.board}
               assignees={tasks.assignees}
+              processes={processes}
               attachments={tasks.detailsAttachments}
               attachmentsLoading={tasks.detailsAttachmentsLoading}
               attachmentsUploading={tasks.detailsAttachmentsUploading}
@@ -912,6 +879,19 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
               onUploadAttachments={(files) => void tasks.uploadDetailsAttachments(files)}
               onDeleteAttachment={(attachmentId) => void tasks.deleteDetailsAttachment(attachmentId)}
               onSave={tasks.handleSaveDetails}
+              onStartExecution={() => {
+                if (detailsForm?.id) {
+                  void (async () => {
+                    await fetch("/api/tasks", {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ action: "startExecution", ticketId: detailsForm.id }),
+                    });
+                    tasks.reloadBoards();
+                    tasks.closeDetailsModal();
+                  })();
+                }
+              }}
               onRetryNow={() => void tasks.executeDetailsControlAction("retry")}
               onCancelExecution={() => void tasks.executeDetailsControlAction("cancel")}
               onApprovePlan={() => { if (detailsForm?.id) { void (async () => { await fetch("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approvePlan", ticketId: detailsForm.id, actorId: "operator" }) }); tasks.reloadBoards(); tasks.closeDetailsModal(); })(); } }}

@@ -177,6 +177,7 @@ function hydrateBoards(
         planApproved: Boolean(t.plan_approved),
         scheduledFor: t.scheduled_for ? t.scheduled_for.slice(0, 10) : null,
         executionState: (t.execution_state as Ticket["executionState"]) ?? "open",
+        processVersionIds: t.process_version_ids ?? [],
         checklistDone: t.checklist_done ?? 0,
         checklistTotal: t.checklist_total ?? 0,
         comments: t.comments_count ?? 0,
@@ -232,6 +233,7 @@ const toTicket = (row: TicketRecord): Ticket => ({
   planApproved: row.planApproved,
   scheduledFor: formatDueDateInput(row.scheduledFor),
   executionState: row.executionState,
+  processVersionIds: row.processVersionIds ?? [],
   checklistDone: row.checklistDone,
   checklistTotal: row.checklistTotal,
   comments: row.commentsCount,
@@ -531,7 +533,8 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       !sameText(createForm.tagsText, createSnapshot.tagsText) ||
       createForm.assigneeIds.join(",") !== createSnapshot.assigneeIds.join(",") ||
       createForm.assignedAgentId !== createSnapshot.assignedAgentId ||
-      createForm.executionMode !== createSnapshot.executionMode,
+      createForm.executionMode !== createSnapshot.executionMode ||
+      (createForm.processVersionIds?.join(",") ?? "") !== (createSnapshot.processVersionIds?.join(",") ?? ""),
     [createForm, createSnapshot],
   );
 
@@ -623,6 +626,7 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       planText: ticket.planText ?? "",
       planApproved: Boolean(ticket.planApproved),
       executionState: ticket.executionState ?? "open",
+      processVersionIds: ticket.processVersionIds ?? [],
       checklistDone: ticket.checklistDone,
       checklistTotal: ticket.checklistTotal,
       comments: ticket.comments,
@@ -1497,6 +1501,7 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       executionMode: createForm.executionMode,
       planText: "",
       planApproved: false,
+      processVersionIds: createForm.processVersionIds || [],
       checklistDone: 0,
       checklistTotal: 0,
       attachmentsCount: 0,
@@ -1982,6 +1987,7 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
                 : detailsForm.executionState === "done"
                   ? "executing"
                   : detailsForm.executionState,
+        processVersionIds: detailsForm.processVersionIds,
         checklistDone: detailsForm.checklistDone,
         checklistTotal: detailsForm.checklistTotal,
         commentsCount: detailsForm.comments,
@@ -2144,21 +2150,35 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
     });
 
     try {
-      await adapter.updateTicket(detailsForm.id, {
-        columnId: nextStatusId,
-        executionState: nextExecutionState,
-        assignedAgentId: detailsForm.assignedAgentId || detailsForm.assigneeIds[0] || undefined,
-        scheduledFor: action === "retry" ? null : toIsoDueDate(detailsForm.scheduledFor),
-      });
-      await createTicketActivity(
-        detailsForm.id,
-        action === "retry" ? "Retry requested" : "Execution cancelled",
-        action === "retry"
-          ? "Marked as ready to execute immediately."
-          : "Execution marked as failed/cancelled by operator.",
-        action === "retry" ? "warning" : "warning",
-      );
-      toast.success(action === "retry" ? "Ticket marked ready to execute." : "Ticket execution marked failed.");
+      if (action === "retry") {
+        // Use the dedicated retry endpoint so the worker picks it up via BullMQ
+        await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "retryExecution", ticketId: detailsForm.id }),
+        });
+        await createTicketActivity(
+          detailsForm.id,
+          "Retry requested",
+          "Marked as ready to execute immediately.",
+          "warning",
+        );
+        toast.success("Ticket marked ready to execute.");
+      } else {
+        await adapter.updateTicket(detailsForm.id, {
+          columnId: nextStatusId,
+          executionState: nextExecutionState,
+          assignedAgentId: detailsForm.assignedAgentId || detailsForm.assigneeIds[0] || undefined,
+          scheduledFor: toIsoDueDate(detailsForm.scheduledFor),
+        });
+        await createTicketActivity(
+          detailsForm.id,
+          "Execution cancelled",
+          "Execution marked as failed/cancelled by operator.",
+          "warning",
+        );
+        toast.success("Ticket execution marked failed.");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to apply execution action.";
       toast.error(message);

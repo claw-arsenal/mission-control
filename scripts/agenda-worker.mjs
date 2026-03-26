@@ -5,9 +5,13 @@
  */
 import postgres from "postgres";
 import { Worker } from "bullmq";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import * as dns from "node:dns";
 import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const lookupAsync = promisify(dns.lookup.bind(dns));
 
@@ -77,13 +81,18 @@ const agendaWorker = new Worker(
         }
       }
 
-      // ── 2. Execute attached processes sequentially ──────────────────────────
+      // ── 2. Execute attached processes sequentially (with cumulative context) ──
       const sorted = [...(processes ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+      // Build cumulative context so each step can reference previous outputs
+      let cumulativeContext = "";
+      if (freePrompt && stepSummaries.length > 0 && stepSummaries[0].success) {
+        cumulativeContext = `Previous output (free prompt):\n${stepSummaries[0].summary || ""}\n\n`;
+      }
 
       for (const proc of sorted) {
         const pvId = proc.process_version_id;
 
-        // Fetch process steps from DB
         const stepRows = await sql`
           select ps.*
           from process_steps ps
@@ -92,6 +101,11 @@ const agendaWorker = new Worker(
         `;
 
         for (const stepRow of stepRows) {
+          // Prepend cumulative context so step can reference previous outputs
+          const contextualInstruction = cumulativeContext
+            ? `Context from previous steps:\n${cumulativeContext}---\nCurrent step instruction:\n${stepRow.instruction}`
+            : stepRow.instruction;
+
           const stepResult = await runAgentStep({
             runAttemptId,
             processVersionId: pvId,
@@ -99,7 +113,7 @@ const agendaWorker = new Worker(
             stepOrder: stepRow.step_order,
             agentId: stepRow.agent_id || agentId || "main",
             skillKey: stepRow.skill_key,
-            instruction: stepRow.instruction,
+            instruction: contextualInstruction,
             timeoutSeconds: stepRow.timeout_seconds,
             sql,
           });
@@ -114,9 +128,11 @@ const agendaWorker = new Worker(
             error: stepResult.error,
           });
 
+          // Accumulate context for next step
+          cumulativeContext += `Previous output (${stepRow.title || 'Step ' + stepRow.step_order}):\n${stepResult.output.slice(0, 500)}\n\n`;
+
           if (!stepResult.success) {
             overallSuccess = false;
-            // Continue to next step unless explicitly failed-critical
           }
         }
       }
@@ -195,12 +211,13 @@ async function runAgentStep({
   sql,
 }) {
   const effectiveAgentId = (agentId && agentId !== "null") ? agentId : "main";
-  const effectiveTimeout = Math.max(timeoutSeconds ?? 300, 60); // minimum 60s
+  const effectiveTimeout = Math.max(timeoutSeconds ?? 300, 60);
   const skillArg = skillKey ? ["--skill", skillKey] : [];
 
   let output = "";
   let errorMsg = null;
   let success = true;
+  let artifactData = null;
 
   try {
     const args = [
@@ -211,28 +228,70 @@ async function runAgentStep({
       ...skillArg,
     ];
 
-    const raw = execFileSync("openclaw", args, {
+    const { stdout: raw } = await execFileAsync("openclaw", args, {
       timeout: effectiveTimeout * 1000,
       env: process.env,
-      encoding: "utf8",
+      maxBuffer: 50 * 1024 * 1024, // 50MB for file payloads
     });
 
     const parsed = JSON.parse(raw);
     const payloads = parsed?.result?.payloads ?? parsed?.payloads ?? [];
-    output = Array.isArray(payloads)
-      ? payloads.map((p) => p.text ?? "").join("\n").trim()
-      : parsed?.result ?? parsed?.text ?? JSON.stringify(parsed);
+
+    // Separate text vs file payloads
+    const textParts = [];
+    const filePayloads = [];
+
+    if (Array.isArray(payloads)) {
+      for (const p of payloads) {
+        if (p.type === "file" && p.data) {
+          filePayloads.push({
+            name: p.name || p.filename || `file-${Date.now()}`,
+            mimeType: p.mimeType || p.contentType || "application/octet-stream",
+            data: p.data,
+          });
+        } else {
+          textParts.push(p.text ?? "");
+        }
+      }
+    }
+
+    output = textParts.join("\n").trim() || (parsed?.result ?? parsed?.text ?? JSON.stringify(parsed));
+
+    // Save file artifacts to disk
+    if (filePayloads.length > 0) {
+      const artifactDir = resolve("/storage/mission-control/artifacts", runAttemptId);
+      await mkdir(artifactDir, { recursive: true });
+
+      const savedFiles = [];
+      for (const art of filePayloads) {
+        const filePath = resolve(artifactDir, art.name);
+        const buffer = Buffer.from(art.data, "base64");
+        await writeFile(filePath, buffer);
+        savedFiles.push({
+          name: art.name,
+          mimeType: art.mimeType,
+          size: buffer.length,
+          path: filePath,
+        });
+      }
+      artifactData = { files: savedFiles };
+    }
   } catch (err) {
     success = false;
     errorMsg = err instanceof Error ? err.message : String(err);
     output = `Error: ${errorMsg}`;
   }
 
+  // Handle empty response
+  if (success && (!output || output.trim() === "")) {
+    output = "(Agent returned empty response)";
+  }
+
   // Persist step result
   await sql`
     insert into agenda_run_steps (
       run_attempt_id, process_version_id, process_step_id, step_order,
-      agent_id, skill_key, input_payload, output_payload, status,
+      agent_id, skill_key, input_payload, output_payload, artifact_payload, status,
       started_at, finished_at, error_message
     ) values (
       ${runAttemptId},
@@ -243,6 +302,7 @@ async function runAgentStep({
       ${skillKey ?? null},
       ${JSON.stringify({ instruction, skillKey, agentId, timeoutSeconds })},
       ${JSON.stringify({ output })},
+      ${artifactData ? JSON.stringify(artifactData) : null},
       ${success ? "succeeded" : "failed"},
       now(),
       now(),
@@ -250,8 +310,31 @@ async function runAgentStep({
     )
   `;
 
-  return { success, output, error: errorMsg };
+  return { success, output, error: errorMsg, artifacts: artifactData };
 }
+
+// ── Stale lock recovery ───────────────────────────────────────────────────────
+async function recoverStaleLocks() {
+  try {
+    const stale = await sql`
+      update agenda_occurrences
+      set status = 'scheduled', locked_at = null
+      where status = 'running'
+        and locked_at < now() - interval '15 minutes'
+      returning id
+    `;
+    if (stale.length > 0) {
+      console.log(`[agenda-worker] Recovered ${stale.length} stale lock(s)`);
+    }
+  } catch (err) {
+    console.warn("[agenda-worker] Stale lock recovery failed:", err.message);
+  }
+}
+
+// Run recovery on startup + every 5 minutes
+await mkdir("/storage/mission-control/artifacts", { recursive: true }).catch(() => {});
+await recoverStaleLocks();
+setInterval(recoverStaleLocks, 5 * 60 * 1000);
 
 // ── Healthcheck ───────────────────────────────────────────────────────────────
 async function checkRedis() {

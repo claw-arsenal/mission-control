@@ -44,6 +44,7 @@ export type ProcessDetail = ProcessSummary & {
 export type ProcessFormData = {
   name: string;
   description: string;
+  versionLabel: string;
   steps: ProcessStep[];
   status: "draft" | "published";
 };
@@ -106,6 +107,7 @@ export function useProcesses() {
       action: "createProcess",
       name: data.name,
       description: data.description,
+      versionLabel: data.versionLabel,
       status: data.status,
       steps: data.steps.map((s, i) => ({
         title: s.title,
@@ -113,6 +115,7 @@ export function useProcesses() {
         skillKey: s.skillKey || null,
         agentId: s.agentId || null,
         timeoutSeconds: s.timeoutSeconds || null,
+        modelOverride: s.modelOverride || null,
         stepOrder: i,
       })),
     });
@@ -128,7 +131,19 @@ export function useProcesses() {
 
   const updateProcess = async (id: string, data: ProcessFormData) => {
     const json = await apiFetch(`/api/processes/${id}`, {
-      ...data,
+      name: data.name,
+      description: data.description,
+      versionLabel: data.versionLabel,
+      steps: data.steps.map((s, i) => ({
+        title: s.title,
+        instruction: s.instruction,
+        skillKey: s.skillKey || null,
+        agentId: s.agentId || null,
+        timeoutSeconds: s.timeoutSeconds || null,
+        modelOverride: s.modelOverride || null,
+        stepOrder: i,
+      })),
+      status: data.status,
       action: undefined,
     });
     if (json.ok) {
