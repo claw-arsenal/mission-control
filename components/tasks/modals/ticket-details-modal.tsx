@@ -65,7 +65,57 @@ import {
   UserIcon,
   XIcon,
   ZapIcon,
+  LockIcon,
+  ShieldCheckIcon,
 } from "lucide-react";
+
+// ── Model constants ──────────────────────────────────────────────────────────
+
+const MODELS = [
+  { id: "anthropic/claude-opus-4-6", alias: "Claude Opus 4" },
+  { id: "openrouter/deepseek/deepseek-chat-v3", alias: "deepseek3chat" },
+  { id: "openrouter/auto", alias: "OpenRouter" },
+  { id: "openrouter/deepseek/deepseek-v3.2", alias: "deepseek3.2" },
+  { id: "openrouter/minimax/minimax-m2.5", alias: "Minimax2.5" },
+  { id: "openrouter/minimax/minimax-m2.7", alias: "Minimax2.7" },
+  { id: "openrouter/openai/gpt-5.4", alias: "gpt5.4" },
+  { id: "openrouter/openai/gpt-oss-120b", alias: "gptoss120b" },
+  { id: "openrouter/openai/gpt-oss-20b:nitro", alias: "gptoss20bnitro" },
+  { id: "openrouter/google/gemini-3-flash-preview", alias: "gemini3flash" },
+  { id: "openrouter/google/gemini-3.1-pro-preview", alias: "gemini3pro" },
+  { id: "openrouter/openai/gpt-5.4-nano", alias: "gpt5.4-nano" },
+  { id: "openrouter/openai/gpt-5.4-mini", alias: "gpt5.4-mini" },
+  { id: "openrouter/stepfun/step-3.5-flash:free", alias: "Step Flash Free" },
+  { id: "openrouter/mistralai/devstral-2512:free", alias: "Devstral Free" },
+  { id: "openrouter/qwen/qwen3-coder:free", alias: "Qwen3 Coder" },
+  { id: "openrouter/deepseek/deepseek-chat-v3:free", alias: "Deepseek Chat V3 Free" },
+];
+
+function getProviderLabel(modelId: string): string {
+  if (modelId.startsWith('anthropic/')) return 'Anthropic';
+  if (modelId.startsWith('openrouter/openai/')) return 'OpenAI';
+  if (modelId.startsWith('openrouter/google/')) return 'Google';
+  if (modelId.startsWith('openrouter/deepseek/')) return 'DeepSeek';
+  if (modelId.startsWith('openrouter/minimax/')) return 'MiniMax';
+  if (modelId.startsWith('openrouter/mistralai/')) return 'Mistral';
+  if (modelId.startsWith('openrouter/qwen/')) return 'Qwen';
+  if (modelId.startsWith('openrouter/stepfun/')) return 'StepFun';
+  if (modelId === 'openrouter/auto') return 'OpenRouter';
+  return 'Other';
+}
+
+function getTimezoneAbbr(timezone: string, date?: Date): string {
+  try {
+    const d = date || new Date();
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'short',
+    }).formatToParts(d);
+    return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    return '';
+  }
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -212,9 +262,10 @@ export function TicketDetailsModal({
 
   const hasAgent = Boolean(form.assignedAgentId);
   const showStart = isEditing && hasAgent && ["open", "draft"].includes(form.executionState);
-  const showRetry = isEditing && form.executionState === "failed";
+  const showRetry = isEditing && ["failed", "needs_retry", "expired"].includes(form.executionState);
   const showCancel = isEditing && ["executing", "planning"].includes(form.executionState);
   const showApproval = isEditing && form.executionState === "awaiting_approval";
+  const isLocked = isEditing && ["executing", "running"].includes(form.executionState);
 
   const removeProcess = (pvId: string) => onChange({ processVersionIds: form.processVersionIds.filter((id) => id !== pvId) });
 
@@ -252,6 +303,14 @@ export function TicketDetailsModal({
             </div>
           </DialogHeader>
 
+          {/* Execution lock banner */}
+          {isLocked && (
+            <div className="mx-6 mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2">
+              <LockIcon className="size-3.5 shrink-0" />
+              <span>This ticket is currently executing. Editing is disabled until execution completes or is cancelled.</span>
+            </div>
+          )}
+
           {/* Two-column Trello layout */}
           <div className="flex overflow-hidden" style={{ maxHeight: "calc(92vh - 140px)" }}>
             {/* ── Main column (left) ─────────────────────────────── */}
@@ -277,8 +336,8 @@ export function TicketDetailsModal({
                   placeholder="Add a more detailed description..."
                   value={form.description}
                   onChange={(e) => onChange({ description: e.target.value })}
-                  rows={4}
-                  className="resize-none text-sm"
+                  rows={6}
+                  className="resize-y text-sm min-h-[120px]"
                 />
               </div>
 
@@ -598,10 +657,46 @@ export function TicketDetailsModal({
                 </Select>
               </div>
 
+              {/* Fallback model */}
+              <div className="flex flex-col gap-1">
+                <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <ShieldCheckIcon className="size-3" />
+                  Fallback Model
+                </Label>
+                <Select
+                  value={form.fallbackModel || "__none__"}
+                  onValueChange={(v) => onChange({ fallbackModel: v === "__none__" ? "" : v })}
+                  disabled={isLocked}
+                >
+                  <SelectTrigger className="h-8 text-xs w-full cursor-pointer">
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {MODELS.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        <span className="font-medium">{m.alias}</span>
+                        <span className="text-muted-foreground text-[10px] ml-1">({getProviderLabel(m.id)})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Execution state badge */}
               {isEditing && (
                 <div className="flex flex-wrap gap-1">
-                  <Badge variant="outline" className="text-[9px]">{executionLabel(form.executionState)}</Badge>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[9px]",
+                      form.executionState === "needs_retry" && "border-amber-500 text-amber-600 dark:text-amber-400",
+                      form.executionState === "expired" && "border-gray-400 text-gray-500",
+                      form.executionState === "failed" && "border-destructive text-destructive",
+                    )}
+                  >
+                    {executionLabel(form.executionState)}
+                  </Badge>
                   {form.executionMode === "planned" && (
                     <Badge variant="outline" className="text-[9px]">{form.planApproved ? "Approved" : "Pending"}</Badge>
                   )}

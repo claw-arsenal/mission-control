@@ -18,6 +18,7 @@ const GATEWAY_LOG_DIR = "/tmp/openclaw";
 const SCAN_INTERVAL_MS = 5000;
 const DEAD_LETTER_REPLAY_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 45000;
+const BL_SERVICE_NAME = "bridge-logger";
 const DEDUPE_WINDOW_MS = 30000;
 
 const dedupeMap = new Map();
@@ -622,6 +623,24 @@ async function main() {
     flushOffsets();
   };
 
+  // Service health heartbeat
+  async function blWriteHeartbeat(status = "running", lastError = null) {
+    try {
+      await getSql()`
+        INSERT INTO service_health (name, status, pid, last_heartbeat_at, last_error, started_at, updated_at)
+        VALUES (${BL_SERVICE_NAME}, ${status}, ${process.pid}, now(), ${lastError}, now(), now())
+        ON CONFLICT (name) DO UPDATE SET
+          status = ${status},
+          pid = ${process.pid},
+          last_heartbeat_at = now(),
+          last_error = COALESCE(${lastError}, service_health.last_error),
+          updated_at = now()
+      `;
+    } catch (err) {
+      console.warn("[bridge-logger] Service heartbeat write failed:", err.message);
+    }
+  }
+
   scan();
   const scanTimer = setInterval(scan, SCAN_INTERVAL_MS);
   const deadLetterTimer = setInterval(() => {
@@ -631,10 +650,18 @@ async function main() {
     void guarded(() => heartbeat(getSql()));
   }, HEARTBEAT_INTERVAL_MS);
 
+  // Service health heartbeat on startup + every 30s
+  void guarded(() => blWriteHeartbeat("running"));
+  const serviceHeartbeatTimer = setInterval(() => {
+    void guarded(() => blWriteHeartbeat("running"));
+  }, 30_000);
+
   const shutdown = async () => {
     clearInterval(scanTimer);
     clearInterval(deadLetterTimer);
     clearInterval(heartbeatTimer);
+    clearInterval(serviceHeartbeatTimer);
+    await blWriteHeartbeat("stopped").catch(() => {});
     flushOffsets();
     await sql.end({ timeout: 3 });
     releaseLock();

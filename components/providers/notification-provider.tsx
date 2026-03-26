@@ -105,6 +105,10 @@ const TICKET_NOTIFY_EVENTS: Record<string, { title: string; type: "success" | "i
   "Retry scheduled": { title: "Retry scheduled", type: "warning", icon: "🔄" },
   "Worker error": { title: "Worker error", type: "error", icon: "⚠️" },
   "Agent response": { title: "Agent responded", type: "success", icon: "🤖" },
+  "Expired": { title: "Ticket expired", type: "warning", icon: "⏰" },
+  "Needs retry": { title: "Needs manual retry", type: "warning", icon: "⚠️" },
+  "Manual retry": { title: "Manual retry queued", type: "info", icon: "🔄" },
+  "Fallback model used": { title: "Fallback model used", type: "warning", icon: "🔄" },
 };
 
 type AgendaOccurrenceRow = {
@@ -153,10 +157,16 @@ export function NotificationProvider(): null {
     if (s.sound) playNotificationSound(type);
   }, []);
 
-  // SSE: ticket activity stream
+  // SSE: ticket activity stream + polling for failed agenda & service health
   useEffect(() => {
     if (mountedRef.current) return;
     mountedRef.current = true;
+
+    // Track initial load to avoid notification storms
+    let failedSeeded = false;
+    let servicesSeeded = false;
+    const knownFailedIds = new Set<string>();
+    const knownServiceStatuses = new Map<string, string>();
 
     // Ticket activity SSE
     const ticketSSE = new EventSource("/api/events");
@@ -190,7 +200,6 @@ export function NotificationProvider(): null {
         if (!row) return;
 
         const eventType = String(row.event_type || row.eventType || "");
-        const level = String(row.level || "info");
         const message = String(row.message_preview || row.message || "");
 
         // Only notify on important agent events
@@ -203,9 +212,81 @@ export function NotificationProvider(): null {
     });
     logSSE.onerror = () => { /* reconnects automatically */ };
 
+    // Poll: failed agenda occurrences (every 60s)
+    const pollFailed = async () => {
+      try {
+        const res = await fetch("/api/agenda/failed", { cache: "reload" });
+        const json = await res.json();
+        if (!json.ok) return;
+        const occs: AgendaOccurrenceRow[] = json.occurrences ?? [];
+
+        if (!failedSeeded) {
+          // Seed initial state without notifying
+          for (const o of occs) if (o.id) knownFailedIds.add(o.id);
+          failedSeeded = true;
+          return;
+        }
+
+        for (const o of occs) {
+          if (!o.id || knownFailedIds.has(o.id)) continue;
+          knownFailedIds.add(o.id);
+
+          const title = o.event_title || "Agenda event";
+          if (o.status === "needs_retry") {
+            notify("⚠️ Needs Retry", title, "warning", `failed-${o.id}`);
+          } else if (o.status === "expired") {
+            notify("⏰ Expired", title, "warning", `failed-${o.id}`);
+          } else if (o.status === "failed") {
+            // Critical: play sound + toast
+            notify("❌ Failed", title, "error", `failed-${o.id}`);
+          }
+        }
+      } catch { /* ignore */ }
+    };
+
+    // Poll: service health (every 30s)
+    const pollServices = async () => {
+      try {
+        const res = await fetch("/api/services", { cache: "reload" });
+        const json = await res.json();
+        if (!json.ok) return;
+        const svcs: { name: string; status: string; pidAlive: boolean }[] = json.services ?? [];
+
+        if (!servicesSeeded) {
+          for (const s of svcs) knownServiceStatuses.set(s.name, s.pidAlive ? s.status : "stopped");
+          servicesSeeded = true;
+          return;
+        }
+
+        for (const s of svcs) {
+          const effectiveStatus = s.pidAlive ? s.status : "stopped";
+          const prev = knownServiceStatuses.get(s.name);
+          knownServiceStatuses.set(s.name, effectiveStatus);
+
+          if (prev === effectiveStatus) continue;
+          if (!prev) continue; // First time seeing this service
+
+          if (effectiveStatus === "stopped" && prev === "running") {
+            notify(`🔴 ${s.name} stopped`, "Service is no longer running", "warning", `svc-${s.name}-stopped`);
+          } else if (effectiveStatus === "error") {
+            notify(`🔴 ${s.name} error`, "Service encountered an error", "error", `svc-${s.name}-error`);
+          } else if (effectiveStatus === "running" && prev !== "running") {
+            notify(`🟢 ${s.name} started`, "Service is now running", "info", `svc-${s.name}-started`);
+          }
+        }
+      } catch { /* ignore */ }
+    };
+
+    void pollFailed();
+    void pollServices();
+    const failedTimer = setInterval(pollFailed, 60_000);
+    const servicesTimer = setInterval(pollServices, 30_000);
+
     return () => {
       ticketSSE.close();
       logSSE.close();
+      clearInterval(failedTimer);
+      clearInterval(servicesTimer);
       mountedRef.current = false;
     };
   }, [notify]);

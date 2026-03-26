@@ -39,9 +39,12 @@ export type CalendarEvent = {
   isRecurring?: boolean;
   status?: "draft" | "active";
   latestResult?: "scheduled" | "running" | "succeeded" | "failed" | null;
+  runStartedAt?: string | null;
+  runFinishedAt?: string | null;
+  timezone?: string;
 };
 
-export type EventColor = "blue" | "green" | "orange" | "pink" | "purple" | "gray" | "default";
+export type EventColor = "blue" | "green" | "orange" | "pink" | "purple" | "teal" | "amber" | "indigo" | "rose" | "cyan" | "lime" | "gray" | "default";
 
 export type ViewMode = "month" | "week" | "day";
 
@@ -77,7 +80,7 @@ function NowIndicator({ now, hourHeight, leftOffset = 0 }: { now: Date; hourHeig
   const topPx = ((hours * 60 + minutes) / 60) * hourHeight;
   return (
     <div
-      className="absolute pointer-events-none z-30"
+      className="absolute pointer-events-none z-[2]"
       style={{ top: `${topPx}px`, left: leftOffset, right: 0 }}
     >
       {/* Purple dot */}
@@ -94,10 +97,39 @@ function NowIndicator({ now, hourHeight, leftOffset = 0 }: { now: Date; hourHeig
   );
 }
 
+function getTimezoneAbbr(timezone: string | undefined): string {
+  if (!timezone) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      timeZoneName: 'short',
+    }).formatToParts(new Date());
+    return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function formatDuration(startedAt: string | null | undefined, finishedAt: string | null | undefined): string | null {
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  const diffMs = end - start;
+  if (diffMs < 0) return null;
+  const secs = Math.floor(diffMs / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+}
+
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MAX_VISIBLE = 4;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const HOUR_HEIGHT = 96; // px per hour slot in week/day views
+const HOUR_HEIGHT = 64; // px per hour slot in week/day views
 
 // ── Color palette — matches JSONC AgendaEventItem spec ──────────────────────────
 
@@ -107,6 +139,12 @@ const EVENT_COLORS: Record<EventColor, { bg: string; text: string; border: strin
   orange:  { bg: "#fff3e8", text: "#ea580c", border: "#fed7aa" },
   pink:    { bg: "#fdecf3", text: "#ec4899", border: "#fbcfe8" },
   purple:  { bg: "#f3e8ff", text: "#8b5cf6", border: "#ddd6fe" },
+  teal:    { bg: "#e6fcf5", text: "#0d9488", border: "#99f6e4" },
+  amber:   { bg: "#fffbeb", text: "#d97706", border: "#fde68a" },
+  indigo:  { bg: "#eef2ff", text: "#6366f1", border: "#c7d2fe" },
+  rose:    { bg: "#fff1f2", text: "#e11d48", border: "#fecdd3" },
+  cyan:    { bg: "#ecfeff", text: "#0891b2", border: "#a5f3fc" },
+  lime:    { bg: "#f7fee7", text: "#65a30d", border: "#d9f99d" },
   gray:    { bg: "#f3f4f6", text: "#6b7280", border: "#d1d5db" },
   default: { bg: "hsl(var(--secondary))", text: "hsl(var(--secondary-foreground))", border: "hsl(var(--border))" },
 };
@@ -117,12 +155,18 @@ const DOT_COLORS: Record<EventColor, string> = {
   orange:  "#ea580c",
   pink:    "#ec4899",
   purple:  "#8b5cf6",
+  teal:    "#0d9488",
+  amber:   "#d97706",
+  indigo:  "#6366f1",
+  rose:    "#e11d48",
+  cyan:    "#0891b2",
+  lime:    "#65a30d",
   gray:    "#9ca3af",
   default: "hsl(var(--muted-foreground))",
 };
 
 // ── Auto-color from event ID ────────────────────────────────────────────────
-const ACTIVE_COLORS: EventColor[] = ["blue", "green", "orange", "pink", "purple"];
+const ACTIVE_COLORS: EventColor[] = ["blue", "green", "orange", "pink", "purple", "teal", "amber", "indigo", "rose", "cyan", "lime"];
 function hashColor(id: string): EventColor {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
@@ -151,17 +195,23 @@ const RESULT_INDICATOR: Record<string, { emoji: string; color: string; pulse?: b
 function OccurrenceStatusDot({ result, size = 6 }: { result: CalendarEvent["latestResult"]; size?: number }) {
   if (!result || !RESULT_INDICATOR[result]) return null;
   const cfg = RESULT_INDICATOR[result];
+
+  if (result === 'running') {
+    return (
+      <span className="relative flex shrink-0" style={{ width: size, height: size }}
+        title="Running"
+      >
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+        <span className="relative inline-flex rounded-full bg-blue-500" style={{ width: size, height: size }} />
+      </span>
+    );
+  }
+
   return (
     <span
       className="relative inline-flex shrink-0"
       title={result.charAt(0).toUpperCase() + result.slice(1)}
     >
-      {cfg.pulse && (
-        <span
-          className={`animate-ping absolute inline-flex h-full w-full rounded-full ${cfg.color} opacity-75`}
-          style={{ width: size, height: size }}
-        />
-      )}
       <span
         className={`relative inline-flex rounded-full ${cfg.color}`}
         style={{ width: size, height: size }}
@@ -258,6 +308,10 @@ function EventPill({ event }: { event: CalendarEvent }) {
             }}
           >
             {event.latestResult === "running" ? "● Running" : event.latestResult === "succeeded" ? "✓ Done" : "✗ Failed"}
+            {(() => {
+              const dur = formatDuration(event.runStartedAt, event.runFinishedAt);
+              return dur ? ` · ${dur}` : "";
+            })()}
           </span>
         )}
       </div>
@@ -285,7 +339,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
 
   return (
     <div
-      className="flex flex-col gap-1 px-[10px] py-[6px] rounded-lg overflow-hidden w-full min-h-[44px] transition-all duration-150 hover:shadow-lg hover:brightness-95"
+      className="flex flex-col gap-1 px-[10px] py-[8px] rounded-lg overflow-hidden w-full min-h-[56px] transition-all duration-150 hover:shadow-lg hover:brightness-95"
       style={{
         backgroundColor: bg,
         borderLeft: `4px solid ${dotColor}`,
@@ -311,7 +365,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
             className="text-[11px] font-semibold leading-none"
             style={{ color, opacity: 0.7 }}
           >
-            {timeStr}
+            {timeStr}{event.timezone ? ` ${getTimezoneAbbr(event.timezone)}` : ''}
           </span>
         )}
         {event.isRecurring && <RecurringIcon size={10} />}
@@ -327,6 +381,10 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
             }}
           >
             {event.latestResult === "running" ? "● Running" : event.latestResult === "succeeded" ? "✓ Done" : "✗ Failed"}
+            {(() => {
+              const dur = formatDuration(event.runStartedAt, event.runFinishedAt);
+              return dur ? ` · ${dur}` : "";
+            })()}
           </span>
         )}
       </div>
@@ -544,9 +602,20 @@ function WeekView({
   const todayIndex = weekDays.findIndex((d) => isToday(d));
   const showNowLine = todayIndex >= 0;
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to current time (1 hour before now) on mount — like Outlook
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const currentHour = now.getHours();
+    const scrollToHour = Math.max(0, currentHour - 1);
+    const scrollTop = scrollToHour * HOUR_HEIGHT;
+    container.scrollTop = scrollTop;
+  }, []); // only on mount
 
   return (
-    <div className="overflow-x-auto">
+    <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto max-h-[600px]">
       <div className="min-w-[720px]">
         {/* Day header row */}
         <div className="grid grid-cols-8 border-b bg-muted/40 sticky top-0 z-10">
@@ -710,9 +779,18 @@ function DayView({
   const dayEvts = events.filter((e) => e.date === dayStr);
   const showNowLine = isToday(day);
   const [dragOverHour, setDragOverHour] = useState<number | null>(null);
+  const dayScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to current time on mount
+  useEffect(() => {
+    const container = dayScrollRef.current;
+    if (!container) return;
+    const scrollToHour = Math.max(0, now.getHours() - 1);
+    container.scrollTop = scrollToHour * HOUR_HEIGHT;
+  }, []);
 
   return (
-    <div className="overflow-x-auto">
+    <div ref={dayScrollRef} className="overflow-x-auto overflow-y-auto max-h-[600px]">
       <div className="min-w-[520px]">
         {/* Day header */}
         <div className="flex flex-col items-center py-4 border-b bg-muted/40">
@@ -804,10 +882,12 @@ type Props = {
   currentDate: Date;
   onViewModeChange: (v: ViewMode) => void;
   onDateChange: (d: Date) => void;
-  onEventClick: (eventId: string) => void;
+  onEventClick: (eventId: string, occurrenceDate?: string) => void;
   onDayClick?: (date: Date) => void;
   onEventDrop?: (eventId: string, newDate: string, newTime?: string) => void;
   onAddEvent?: () => void;
+  failedCount?: number;
+  onOpenFailed?: () => void;
 };
 
 export function CustomMonthAgenda({
@@ -821,6 +901,8 @@ export function CustomMonthAgenda({
   onDayClick,
   onEventDrop,
   onAddEvent,
+  failedCount,
+  onOpenFailed,
 }: Props) {
   // ── Convert events ─────────────────────────────────────────────────────────
   const calendarEvents: CalendarEvent[] = useMemo(() => {
@@ -861,6 +943,9 @@ export function CustomMonthAgenda({
         isRecurring: !!props.recurrence && (props.recurrence as string) !== "none",
         status: (props.status as "draft" | "active") ?? "active",
         latestResult: (props.latestResult as CalendarEvent["latestResult"]) ?? null,
+        runStartedAt: (props.runStartedAt as string) ?? null,
+        runFinishedAt: (props.runFinishedAt as string) ?? null,
+        timezone: tz,
       };
     });
   }, [events]);
@@ -917,7 +1002,7 @@ export function CustomMonthAgenda({
       : `${format(monthStart, "MMM d, yyyy")} — ${format(monthEnd, "MMM d, yyyy")}`;
 
   const handleEventClick = useCallback(
-    (evt: CalendarEvent) => onEventClick(evt.id),
+    (evt: CalendarEvent) => onEventClick(evt.id, evt.date),
     [onEventClick]
   );
 
@@ -988,6 +1073,20 @@ export function CustomMonthAgenda({
 
           <div className="w-px h-7 bg-border/60 mx-1" />
 
+          {(failedCount ?? 0) > 0 && (
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-9 px-4 rounded-lg text-[13px] font-semibold cursor-pointer gap-1.5"
+              onClick={onOpenFailed}
+            >
+              <IconChevronLeft className="size-0 hidden" />{/* spacer for import */}
+              ⚠️ Failed Events
+              <span className="bg-white/20 text-white text-[11px] font-bold px-1.5 py-0.5 rounded-md ml-0.5">
+                {failedCount}
+              </span>
+            </Button>
+          )}
           <Button
             size="sm"
             className="h-9 px-4 rounded-lg text-[13px] font-semibold cursor-pointer"

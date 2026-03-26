@@ -6,8 +6,9 @@ import { ClearLogsButton } from "@/components/agents/clear-logs-button";
 import { LogsExplorer } from "@/components/agents/logs-explorer";
 import { LogsLiveRefresh } from "@/components/agents/logs-live-refresh";
 import { QueueManager } from "@/components/agents/queue-manager";
+import { ServiceManager } from "@/components/agents/service-manager";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollTextIcon, LayersIcon } from "lucide-react";
+import { ScrollTextIcon, LayersIcon, ServerIcon } from "lucide-react";
 import type { Agent, AgentLog } from "@/types/agents";
 
 type PageInfo = {
@@ -86,7 +87,7 @@ export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, in
 
   return (
     <>
-      <PageHeader page="Logs & Queues" actions={titleActions} />
+      <PageHeader page="System" actions={titleActions} />
       <div className="flex flex-1 flex-col gap-4 px-3 py-4 sm:px-4 lg:gap-6 lg:px-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="h-10">
@@ -97,6 +98,10 @@ export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, in
             <TabsTrigger value="queues" className="gap-1.5 cursor-pointer">
               <LayersIcon className="size-3.5" />
               Job Queues
+            </TabsTrigger>
+            <TabsTrigger value="services" className="gap-1.5 cursor-pointer">
+              <ServerIcon className="size-3.5" />
+              Services
             </TabsTrigger>
           </TabsList>
 
@@ -114,6 +119,10 @@ export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, in
 
           <TabsContent value="queues" className="mt-4">
             <QueueManager />
+          </TabsContent>
+
+          <TabsContent value="services" className="mt-4">
+            <ServiceManager />
           </TabsContent>
         </Tabs>
       </div>

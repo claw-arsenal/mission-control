@@ -27,6 +27,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { IconDotsVertical } from "@tabler/icons-react";
+import {
   IconCalendar,
   IconClock,
   IconRepeat,
@@ -41,6 +55,8 @@ import {
   IconDownload,
   IconPhoto,
   IconFile,
+  IconLock,
+  IconCopy,
 } from "@tabler/icons-react";
 
 
@@ -64,6 +80,8 @@ export type AgendaEventSummary = {
   recurrenceRule?: string | null;
   occurrenceId?: string;
   modelOverride?: string;
+  executionWindowMinutes?: number;
+  fallbackModel?: string;
 };
 
 type RunAttempt = {
@@ -86,9 +104,12 @@ type ArtifactFile = {
 type RunStep = {
   id: string;
   run_attempt_id: string;
+  step_order: number;
   step_title: string | null;
+  step_instruction: string | null;
   process_name: string | null;
   skill_key: string | null;
+  input_payload: string | Record<string, unknown> | null;
   agent_id: string | null;
   status: string;
   started_at: string | null;
@@ -104,9 +125,23 @@ type Props = {
   agents?: { id: string; name: string }[];
   onClose: () => void;
   onEdit: (event: AgendaEventSummary) => void;
+  onCopy?: (event: AgendaEventSummary) => void;
   onRetry: (occurrenceId: string) => void;
   onDelete: (eventId: string) => void;
 };
+
+function getTimezoneAbbr(timezone: string, date?: Date): string {
+  try {
+    const d = date || new Date();
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      timeZoneName: 'short',
+    }).formatToParts(d);
+    return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    return '';
+  }
+}
 
 function formatTime(ts: string | null, timezone?: string) {
   if (!ts) return "—";
@@ -121,17 +156,36 @@ function formatTime(ts: string | null, timezone?: string) {
   }
 }
 
+/** Wrap any element with a Radix tooltip */
+function Tip({ text, children }: { text: string; children: React.ReactNode }) {
+  if (!text) return <>{children}</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={4} className="max-w-[260px]">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ResultBadge({ status }: { status: string | null }) {
-  const map: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-    succeeded: { label: "Succeeded", variant: "default" },
-    failed:    { label: "Failed",    variant: "destructive" },
-    running:   { label: "Running",   variant: "secondary" },
-    pending:   { label: "Pending",   variant: "outline" },
-    queued:    { label: "Queued",    variant: "outline" },
-    scheduled: { label: "Scheduled", variant: "outline" },
+  const map: Record<string, { label: string; className: string; tooltip: string }> = {
+    succeeded:    { label: "✓ Succeeded",  className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400", tooltip: "The run completed successfully" },
+    failed:       { label: "✗ Failed",     className: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400", tooltip: "The run failed — check output for errors" },
+    running:      { label: "● Running",    className: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400", tooltip: "Currently executing" },
+    pending:      { label: "Pending",      className: "border-muted-foreground/30 text-muted-foreground", tooltip: "Waiting to be picked up" },
+    queued:       { label: "Queued",       className: "border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400", tooltip: "In the execution queue" },
+    scheduled:    { label: "Scheduled",    className: "border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400", tooltip: "Scheduled for future execution" },
+    needs_retry:  { label: "⚠ Needs Retry", className: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400", tooltip: "All retries exhausted — needs manual retry" },
+    expired:      { label: "Expired",      className: "border-muted-foreground/30 text-muted-foreground", tooltip: "Execution window expired before the run could start" },
   };
-  const cfg = map[status ?? ""] ?? { label: status ?? "—", variant: "outline" as const };
-  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+  const cfg = map[status ?? ""] ?? { label: status ?? "—", className: "border-muted-foreground/30 text-muted-foreground", tooltip: "" };
+  return (
+    <Tip text={cfg.tooltip}>
+      <Badge variant="outline" className={`text-[10px] uppercase tracking-wider ${cfg.className}`}>
+        {cfg.label}
+      </Badge>
+    </Tip>
+  );
 }
 
 function renderMarkdown(text: string): React.ReactNode[] {
@@ -324,13 +378,29 @@ function ArtifactFiles({ stepId, files }: { stepId: string; files: ArtifactFile[
   );
 }
 
+function formatDuration(startedAt: string | null | undefined, finishedAt: string | null | undefined): string | null {
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  const diffMs = end - start;
+  if (diffMs < 0) return null;
+  const secs = Math.floor(diffMs / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+}
+
 function humanRecurrence(recurrence: string) {
   if (!recurrence || recurrence === "none") return null;
   const map: Record<string, string> = { daily: "Every day", weekly: "Every week", monthly: "Every month" };
   return map[recurrence] ?? recurrence;
 }
 
-export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRetry, onDelete }: Props) {
+export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCopy, onRetry, onDelete }: Props) {
   const [activeTab, setActiveTab] = useState("overview");
   const [occurrences, setOccurrences] = useState<{ id: string; scheduled_for: string; status: string; latest_attempt_no: number }[]>([]);
   const [selectedOccurrenceId, setSelectedOccurrenceId] = useState<string | null>(null);
@@ -339,6 +409,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [copyRequested, setCopyRequested] = useState(false);
 
   // Fetch occurrences on mount (component is keyed, so this runs fresh each time)
   useEffect(() => {
@@ -354,7 +425,15 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
         const json = await res.json();
         if (json.ok && !controller.signal.aborted) {
           setOccurrences(json.occurrences ?? []);
-          if (json.occurrences?.length > 0) setSelectedOccurrenceId(json.occurrences[0].id);
+          // Only select the specific occurrence for the clicked date — never cross-pollinate
+          const occs = json.occurrences ?? [];
+          if (event.occurrenceId && occs.some((o: { id: string }) => o.id === event.occurrenceId)) {
+            setSelectedOccurrenceId(event.occurrenceId);
+          } else if (!isRecurring && occs.length > 0) {
+            // Non-recurring: safe to pick the only occurrence
+            setSelectedOccurrenceId(occs[0].id);
+          }
+          // Recurring with no matching occurrence → leave null (no run yet for this date)
         }
       } catch { /* ignore aborts + fetch errors */ }
     })();
@@ -411,8 +490,8 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
   const recurrenceLabel = humanRecurrence(event.recurrence);
 
   return (
-    <>
-      <Sheet open={open} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
+    <TooltipProvider delayDuration={200}>
+      <Sheet open={open && !deleteDialogOpen} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
         <SheetContent className="w-full sm:max-w-[640px] overflow-y-auto p-0 flex flex-col">
           {/* ── Header ── */}
           <div className="p-6 pb-4">
@@ -421,20 +500,34 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                 <div className="flex flex-col gap-2 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <SheetTitle className="text-xl leading-tight">{event.title}</SheetTitle>
-                    <Badge
-                      variant={event.status === "active" ? "default" : "outline"}
-                      className="text-[10px] uppercase tracking-wider"
-                    >
-                      {event.status === "active" && (
-                        <span className="size-1.5 rounded-full bg-emerald-400 mr-1 shrink-0" />
-                      )}
-                      {event.status}
-                    </Badge>
-                    {isRecurring && (
-                      <Badge variant="outline" className="text-[10px] uppercase tracking-wider gap-1">
-                        <IconRepeat className="size-2.5" />
-                        Recurring
+                    <Tip text={event.status === "active"
+                      ? "This event is active and will execute on schedule"
+                      : "This event is a draft and will not execute until activated"}>
+                      <Badge
+                        variant="outline"
+                        className={[
+                          "text-[10px] uppercase tracking-wider cursor-default",
+                          event.status === "active"
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : "border-muted-foreground/30 text-muted-foreground",
+                        ].join(" ")}
+                      >
+                        {event.status === "active" && (
+                          <span className="size-1.5 rounded-full bg-emerald-500 mr-1 shrink-0" />
+                        )}
+                        {event.status}
                       </Badge>
+                    </Tip>
+                    {isRecurring && (
+                      <Tip text="This event repeats on a schedule (daily, weekly, or monthly)">
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] uppercase tracking-wider gap-1 border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400 cursor-default"
+                        >
+                          <IconRepeat className="size-2.5" />
+                          Recurring
+                        </Badge>
+                      </Tip>
                     )}
                     {/* Event ID — inline, copyable */}
                     <button
@@ -447,24 +540,53 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5 h-8 text-xs font-semibold cursor-pointer"
-                    onClick={() => onEdit(event)}
-                  >
-                    <IconPencil className="size-3" />
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    className="gap-1.5 h-8 text-xs font-semibold cursor-pointer"
-                    onClick={() => setDeleteDialogOpen(true)}
-                  >
-                    <IconX className="size-3" />
-                    Delete
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="outline" className="h-8 w-8 p-0 cursor-pointer">
+                        <IconDotsVertical className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      {selectedOccurrence?.status === "running" ? (
+                        <DropdownMenuItem disabled className="gap-2 opacity-50">
+                          <IconLock className="size-3.5" />
+                          Edit (running)
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => onEdit(event)}>
+                          <IconPencil className="size-3.5" />
+                          Edit
+                        </DropdownMenuItem>
+                      )}
+                      {onCopy && (
+                        <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => { onCopy(event); onClose(); }}>
+                          <IconCopy className="size-3.5" />
+                          Duplicate
+                        </DropdownMenuItem>
+                      )}
+                      {selectedOccurrence && ["running", "needs_retry", "failed", "expired"].includes(selectedOccurrence.status) && selectedOccurrenceId && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="gap-2 cursor-pointer text-amber-600 dark:text-amber-400"
+                            onClick={() => onRetry(selectedOccurrenceId)}
+                          >
+                            <IconRefresh className="size-3.5" />
+                            {selectedOccurrence.status === "running" ? "Force Retry" : "Retry"}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        className="gap-2 cursor-pointer"
+                        onClick={() => setDeleteDialogOpen(true)}
+                      >
+                        <IconX className="size-3.5" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             </SheetHeader>
@@ -494,7 +616,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                     <CardHeader>
                       <CardDescription>Schedule</CardDescription>
                       <CardTitle className="text-lg font-semibold tabular-nums">
-                        {event.startTime || "—"}
+                        {event.startTime ? `${event.startTime} ${getTimezoneAbbr(event.timezone)}` : "—"}
                       </CardTitle>
                       <CardAction>
                         <Badge variant="outline">
@@ -536,6 +658,30 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                     </CardFooter>
                   </Card>
 
+                  {/* Fallback Model (if set) */}
+                  {event.fallbackModel && (
+                    <Card data-slot="card">
+                      <CardHeader>
+                        <CardDescription>Fallback Model</CardDescription>
+                        <CardTitle className="text-lg font-semibold truncate">
+                          {event.fallbackModel}
+                        </CardTitle>
+                        <CardAction>
+                          <Badge variant="outline">
+                            <IconBrain className="size-3" />
+                            Fallback
+                          </Badge>
+                        </CardAction>
+                      </CardHeader>
+                      <CardFooter className="flex-col items-start gap-1 text-sm">
+                        <div className="text-muted-foreground text-xs">
+                          Used when primary model hits rate limits
+                        </div>
+
+                      </CardFooter>
+                    </Card>
+                  )}
+
                   {/* Recurrence */}
                   {isRecurring && (
                     <Card data-slot="card">
@@ -576,7 +722,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                         <div className="text-muted-foreground text-xs">
                           {formatTime(selectedOccurrence.scheduled_for, event.timezone)}
                         </div>
-                        {selectedOccurrence.status === "failed" && (
+                        {["failed", "needs_retry", "expired"].includes(selectedOccurrence.status) && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -586,6 +732,38 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                             <IconRefresh className="size-3" />
                             Retry
                           </Button>
+                        )}
+                      </CardFooter>
+                    </Card>
+                  )}
+
+                  {/* Duration */}
+                  {selectedAttempt?.started_at && (
+                    <Card data-slot="card">
+                      <CardHeader>
+                        <CardDescription>Duration</CardDescription>
+                        <CardTitle className="text-lg font-semibold tabular-nums">
+                          {formatDuration(selectedAttempt.started_at, selectedAttempt.finished_at) ?? "—"}
+                        </CardTitle>
+                        <CardAction>
+                          <Badge variant="outline" className={
+                            !selectedAttempt.finished_at
+                              ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          }>
+                            <IconClock className="size-3" />
+                            {selectedAttempt.finished_at ? "Completed" : "In progress"}
+                          </Badge>
+                        </CardAction>
+                      </CardHeader>
+                      <CardFooter className="flex-col items-start gap-1 text-sm">
+                        <div className="text-muted-foreground text-xs">
+                          Started {formatTime(selectedAttempt.started_at, event.timezone)}
+                        </div>
+                        {selectedAttempt.finished_at && (
+                          <div className="text-muted-foreground text-xs">
+                            Finished {formatTime(selectedAttempt.finished_at, event.timezone)}
+                          </div>
                         )}
                       </CardFooter>
                     </Card>
@@ -634,42 +812,54 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                     <p className="text-sm text-muted-foreground">No runs yet.</p>
                   </div>
                 ) : (
-                  attempts.map((attempt) => (
-                    <Card
-                      key={attempt.id}
-                      data-slot="card"
-                      className={`cursor-pointer transition-all ${
-                        attempt.id === selectedAttemptId
-                          ? "border-primary ring-1 ring-primary/20 bg-gradient-to-t from-primary/5 to-card shadow-xs"
-                          : "hover:bg-muted/30 bg-gradient-to-t from-primary/5 to-card shadow-xs"
-                      }`}
-                      onClick={() => setSelectedAttemptId(attempt.id)}
-                    >
-                      <CardHeader>
-                        <CardDescription>Attempt #{attempt.attempt_no}</CardDescription>
-                        <CardTitle className="text-base font-semibold">
-                          <ResultBadge status={attempt.status} />
-                        </CardTitle>
-                        <CardAction>
-                          <Badge variant="outline">
-                            <IconTrendingUp className="size-3" />
-                            {attempt.status}
-                          </Badge>
-                        </CardAction>
-                      </CardHeader>
-                      <CardFooter className="flex-col items-start gap-1 text-sm">
-                        <div className="text-muted-foreground text-xs">
-                          {formatTime(attempt.started_at, event.timezone)}
-                          {attempt.finished_at && ` → ${formatTime(attempt.finished_at, event.timezone)}`}
-                        </div>
-                        {(attempt.summary || attempt.error_message) && (
-                          <div className="text-xs text-muted-foreground truncate max-w-full">
-                            {attempt.summary || attempt.error_message}
-                          </div>
-                        )}
-                      </CardFooter>
-                    </Card>
-                  ))
+                  <>
+                    <p className="text-xs text-muted-foreground/60 flex items-center gap-1.5">
+                      <IconFileText className="size-3" />
+                      Click a run to select it, then switch to the <strong>Output</strong> tab to see its full results.
+                    </p>
+                    {attempts.map((attempt) => {
+                      const isSelected = attempt.id === selectedAttemptId;
+                      const dur = formatDuration(attempt.started_at, attempt.finished_at);
+                      return (
+                        <Card
+                          key={attempt.id}
+                          data-slot="card"
+                          className={`cursor-pointer transition-all group ${
+                            isSelected
+                              ? "border-primary ring-1 ring-primary/20 bg-gradient-to-t from-primary/5 to-card shadow-xs"
+                              : "hover:bg-muted/30 bg-gradient-to-t from-primary/5 to-card shadow-xs"
+                          }`}
+                          onClick={() => {
+                            setSelectedAttemptId(attempt.id);
+                            setActiveTab("output");
+                          }}
+                        >
+                          <CardHeader>
+                            <CardDescription>Attempt #{attempt.attempt_no}{dur ? ` · ${dur}` : ""}</CardDescription>
+                            <CardTitle className="text-base font-semibold">
+                              <ResultBadge status={attempt.status} />
+                            </CardTitle>
+                            <CardAction>
+                              <span className="text-[10px] text-primary font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
+                                View output →
+                              </span>
+                            </CardAction>
+                          </CardHeader>
+                          <CardFooter className="flex-col items-start gap-1 text-sm">
+                            <div className="text-muted-foreground text-xs">
+                              {formatTime(attempt.started_at, event.timezone)}
+                              {attempt.finished_at && ` → ${formatTime(attempt.finished_at, event.timezone)}`}
+                            </div>
+                            {(attempt.summary || attempt.error_message) && (
+                              <div className="text-xs text-muted-foreground truncate max-w-full">
+                                {attempt.summary || attempt.error_message}
+                              </div>
+                            )}
+                          </CardFooter>
+                        </Card>
+                      );
+                    })}
+                  </>
                 )}
               </TabsContent>
 
@@ -686,47 +876,117 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
                     <p className="text-sm text-muted-foreground">No output recorded.</p>
                   </div>
                 ) : (
-                  attemptSteps.map((step) => (
-                    <Card
-                      key={step.id}
-                      data-slot="card"
-                      className="bg-gradient-to-t from-primary/5 to-card shadow-xs"
-                    >
-                      <CardHeader>
-                        <CardDescription>
-                          {step.process_name ? `Process: ${step.process_name}` : "Free Prompt"}
-                        </CardDescription>
-                        <CardTitle className="text-base font-semibold">
-                          <ResultBadge status={step.status} />
-                        </CardTitle>
-                        {(step.skill_key || step.agent_id) && (
+                  attemptSteps.map((step) => {
+                    // Extract the prompt/instruction from input_payload
+                    let promptText: string | null = null;
+                    if (step.input_payload) {
+                      const raw = step.input_payload;
+                      const payload = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : raw;
+                      if (payload && typeof payload === "object") {
+                        promptText = (payload as Record<string, unknown>).instruction as string ?? null;
+                      }
+                    }
+                    // Fall back to step_instruction from process definition
+                    if (!promptText && step.step_instruction) {
+                      promptText = step.step_instruction;
+                    }
+
+                    const stepLabel = step.process_name
+                      ? `Step ${step.step_order + 1}: ${step.step_title || step.process_name}`
+                      : "Free Prompt";
+
+                    return (
+                      <Card
+                        key={step.id}
+                        data-slot="card"
+                        className="bg-gradient-to-t from-primary/5 to-card shadow-xs"
+                      >
+                        {/* Step header — title + status */}
+                        <CardHeader>
+                          <CardTitle className="text-base font-semibold">{stepLabel}</CardTitle>
                           <CardAction>
-                            <Badge variant="outline" className="text-[10px]">
-                              {[step.skill_key, step.agent_id].filter(Boolean).join(" · ")}
-                            </Badge>
+                            <ResultBadge status={step.status} />
                           </CardAction>
-                        )}
-                      </CardHeader>
-                      <CardContent>
-                        {step.error_message ? (
-                          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-600">
-                            {step.error_message}
+                        </CardHeader>
+
+                        <CardContent className="flex flex-col gap-3">
+                          {/* Step metadata — stacked vertically */}
+                          <div className="flex flex-col gap-1.5 rounded-lg bg-muted/30 p-3">
+                            {step.process_name && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Process</span>
+                                <span className="text-xs text-foreground">{step.process_name}</span>
+                              </div>
+                            )}
+                            {step.step_title && step.step_title !== step.process_name && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Title</span>
+                                <span className="text-xs text-foreground">{step.step_title}</span>
+                              </div>
+                            )}
+                            {step.skill_key && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Skill</span>
+                                <Badge variant="secondary" className="text-[10px]">{step.skill_key}</Badge>
+                              </div>
+                            )}
+                            {step.agent_id && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Agent</span>
+                                <span className="text-xs font-mono text-foreground/80">{step.agent_id}</span>
+                              </div>
+                            )}
+                            {step.step_instruction && (
+                              <div className="flex items-start gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0 pt-0.5">Desc</span>
+                                <span className="text-xs text-foreground/80 leading-relaxed">{step.step_instruction.length > 300 ? step.step_instruction.slice(0, 300) + "…" : step.step_instruction}</span>
+                              </div>
+                            )}
+                            {(step.started_at || step.finished_at) && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Time</span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {step.started_at ? formatTime(step.started_at, event.timezone) : "—"}
+                                  {step.finished_at ? ` → ${formatTime(step.finished_at, event.timezone)}` : ""}
+                                </span>
+                              </div>
+                            )}
                           </div>
-                        ) : step.status === "succeeded" && step.output_payload ? (
-                          <AgentOutput outputPayload={step.output_payload} />
-                        ) : (
-                          <p className="text-sm text-muted-foreground">No output available</p>
-                        )}
-                        {(() => {
-                          let ap: { files: ArtifactFile[] } | null = null;
-                          const raw = step.artifact_payload;
-                          if (typeof raw === "string") { try { ap = JSON.parse(raw); } catch { ap = null; } }
-                          else if (typeof raw === "object" && raw !== null) { ap = raw as { files: ArtifactFile[] }; }
-                          return ap?.files && ap.files.length > 0 ? <ArtifactFiles stepId={step.id} files={ap.files} /> : null;
-                        })()}
-                      </CardContent>
-                    </Card>
-                  ))
+
+                          {/* Prompt / Instruction */}
+                          {promptText && (
+                            <div className="rounded-lg border border-dashed border-muted-foreground/20 bg-muted/20 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Prompt</p>
+                              <p className="text-xs text-foreground/80 whitespace-pre-wrap leading-relaxed">{promptText.length > 500 ? promptText.slice(0, 500) + "…" : promptText}</p>
+                            </div>
+                          )}
+
+                          {/* Output */}
+                          {step.error_message ? (
+                            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-600">
+                              {step.error_message}
+                            </div>
+                          ) : step.status === "succeeded" && step.output_payload ? (
+                            <>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Output</p>
+                              <AgentOutput outputPayload={step.output_payload} />
+                            </>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No output available</p>
+                          )}
+
+                          {/* Artifacts */}
+                          {(() => {
+                            let ap: { files: ArtifactFile[] } | null = null;
+                            const raw = step.artifact_payload;
+                            if (typeof raw === "string") { try { ap = JSON.parse(raw); } catch { ap = null; } }
+                            else if (typeof raw === "object" && raw !== null) { ap = raw as { files: ArtifactFile[] }; }
+                            return ap?.files && ap.files.length > 0 ? <ArtifactFiles stepId={step.id} files={ap.files} /> : null;
+                          })()}
+                        </CardContent>
+                      </Card>
+                    );
+                  })
                 )}
               </TabsContent>
             </div>
@@ -734,9 +994,9 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
         </SheetContent>
       </Sheet>
 
-      {/* Delete confirmation — rendered at portal root to avoid Sheet z-index issues */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent className="z-[60]">
+      {/* Delete confirmation — uses [&>div]:z-[60] to lift both overlay + content above the Sheet */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={(isOpen) => { setDeleteDialogOpen(isOpen); }}>
+        <AlertDialogContent className="max-h-[90vh] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-destructive">
               <IconX className="size-4" />
@@ -744,21 +1004,78 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onRet
             </AlertDialogTitle>
             <AlertDialogDescription className="text-sm">
               {isRecurring
-                ? `This will permanently delete "${event.title}" and ALL its occurrences (past and future). This cannot be undone.`
+                ? `"${event.title}" is a recurring event. Choose what to delete.`
                 : `This will permanently delete "${event.title}" and its run history. This cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => { onDelete(event.id); setDeleteDialogOpen(false); onClose(); }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 cursor-pointer"
-            >
-              Delete event
-            </AlertDialogAction>
-          </AlertDialogFooter>
+          {isRecurring ? (
+            <div className="flex flex-col gap-2 mt-2">
+              <Button
+                variant="outline"
+                className="h-auto px-4 py-3 justify-start text-left gap-3 cursor-pointer border-destructive/30 hover:bg-destructive/5"
+                onClick={() => {
+                  // Cancel just this occurrence
+                  if (selectedOccurrenceId) {
+                    void fetch(`/api/agenda/events/${event.id}/occurrences/${selectedOccurrenceId}`, { method: "DELETE" });
+                  }
+                  setDeleteDialogOpen(false);
+                  onClose();
+                  document.dispatchEvent(new CustomEvent("agenda-refresh"));
+                }}
+              >
+                <IconCalendar className="size-4 text-destructive shrink-0" />
+                <div>
+                  <p className="font-semibold text-sm">Only this occurrence</p>
+                  <p className="text-xs text-muted-foreground">Cancel this one run only. The rest of the series continues.</p>
+                </div>
+              </Button>
+              <Button
+                variant="outline"
+                className="h-auto px-4 py-3 justify-start text-left gap-3 cursor-pointer border-destructive/30 hover:bg-destructive/5"
+                onClick={() => {
+                  // Delete this occurrence + all future ones
+                  if (selectedOccurrenceId) {
+                    void fetch(`/api/agenda/events/${event.id}/occurrences/${selectedOccurrenceId}`, { method: "DELETE" });
+                  }
+                  onDelete(event.id);
+                  setDeleteDialogOpen(false);
+                  onClose();
+                }}
+              >
+                <IconX className="size-4 text-destructive shrink-0" />
+                <div>
+                  <p className="font-semibold text-sm text-destructive">This and all future</p>
+                  <p className="text-xs text-muted-foreground">Cancel this occurrence and stop all future runs. Past runs are kept.</p>
+                </div>
+              </Button>
+              <Button
+                variant="outline"
+                className="h-auto px-4 py-3 justify-start text-left gap-3 cursor-pointer border-destructive/30 hover:bg-destructive/5"
+                onClick={() => { onDelete(event.id); setDeleteDialogOpen(false); onClose(); }}
+              >
+                <IconRepeat className="size-4 text-destructive shrink-0" />
+                <div>
+                  <p className="font-semibold text-sm text-destructive">Stop entire series</p>
+                  <p className="text-xs text-muted-foreground">Cancel all future runs and deactivate the series. Past runs are kept for history.</p>
+                </div>
+              </Button>
+              <AlertDialogFooter className="mt-1">
+                <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+              </AlertDialogFooter>
+            </div>
+          ) : (
+            <AlertDialogFooter>
+              <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => { onDelete(event.id); setDeleteDialogOpen(false); onClose(); }}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90 cursor-pointer"
+              >
+                Delete event
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          )}
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </TooltipProvider>
   );
 }

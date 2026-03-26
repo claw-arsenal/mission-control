@@ -36,14 +36,27 @@ import {
   type ViewMode,
 } from "@/types/tasks";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ChevronLeftIcon,
   Clock3Icon,
+  CopyIcon,
   MoreHorizontalIcon,
   PlusIcon,
   SearchIcon,
   SlidersHorizontalIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { BoardActivityFeed, type LiveLog } from "@/components/tasks/boards/board-activity-feed";
+import { FailedTicketsBucket } from "@/components/tasks/boards/failed-tickets-bucket";
 
 // UTC date formatting to avoid hydration mismatches
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -162,6 +175,14 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
   const [openedTicketFromQuery, setOpenedTicketFromQuery] = useState<string | null>(null);
   const [boardActivity, setBoardActivity] = useState<LiveLog[]>([]);
   const [boardActivityLoading, setBoardActivityLoading] = useState(false);
+
+  // Confirmation modal state
+  const [deleteBoardId, setDeleteBoardId] = useState<string | null>(null);
+  const [deleteBoardName, setDeleteBoardName] = useState("");
+  const [copyBoardId, setCopyBoardId] = useState<string | null>(null);
+  const [copyBoardName, setCopyBoardName] = useState("");
+  const [copyAndOpen, setCopyAndOpen] = useState(false);
+
   const boardParam = searchParams.get("board");
   const ticketParam = searchParams.get("ticket");
 
@@ -202,6 +223,8 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
       planApproved: false,
       executionState: "open",
       processVersionIds: tasks.createForm.processVersionIds || [],
+      executionWindowMinutes: tasks.createForm.executionWindowMinutes ?? 60,
+      fallbackModel: tasks.createForm.fallbackModel ?? "",
       checklistDone: 0,
       checklistTotal: 0,
       comments: 0,
@@ -227,11 +250,20 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
     router.replace(query ? `/boards?${query}` : "/boards");
   };
 
-  const handleDeleteBoard = async (boardId: string) => {
+  // ── Delete board: show confirmation first ──────────────────────────────────
+  const requestDeleteBoard = (boardId: string) => {
+    const board = tasks.boardSummaries.find((b) => b.id === boardId);
+    setDeleteBoardName(board?.name ?? "this board");
+    setDeleteBoardId(boardId);
+  };
+
+  const confirmDeleteBoard = async () => {
+    if (!deleteBoardId) return;
+    const boardId = deleteBoardId;
+    setDeleteBoardId(null);
+
     const deleted = await tasks.handleDeleteBoard(boardId);
-    if (!deleted) {
-      return;
-    }
+    if (!deleted) return;
 
     if (boardParam === boardId) {
       setWorkspaceOpen(false);
@@ -242,11 +274,22 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
     }
   };
 
-  const handleCopyBoard = async (boardId: string, openCopiedBoard = false) => {
+  // ── Copy board: show confirmation first ───────────────────────────────────
+  const requestCopyBoard = (boardId: string, openAfter = false) => {
+    const board = tasks.boardSummaries.find((b) => b.id === boardId);
+    setCopyBoardName(board?.name ?? "this board");
+    setCopyBoardId(boardId);
+    setCopyAndOpen(openAfter);
+  };
+
+  const confirmCopyBoard = async () => {
+    if (!copyBoardId) return;
+    const boardId = copyBoardId;
+    const shouldOpen = copyAndOpen;
+    setCopyBoardId(null);
+
     const copiedBoardId = await tasks.handleCopyBoard(boardId);
-    if (!copiedBoardId || !openCopiedBoard) {
-      return;
-    }
+    if (!copiedBoardId || !shouldOpen) return;
     openBoardWorkspace(copiedBoardId);
   };
 
@@ -427,12 +470,12 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                       <DropdownMenuItem onClick={() => tasks.openEditBoardModal(tasks.activeBoardId)}>
                         Edit board
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => void handleCopyBoard(tasks.activeBoardId, true)}>
+                      <DropdownMenuItem onClick={() => requestCopyBoard(tasks.activeBoardId, true)}>
                         Copy board
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"
-                        onClick={() => void handleDeleteBoard(tasks.activeBoardId)}
+                        onClick={() => requestDeleteBoard(tasks.activeBoardId)}
                       >
                         Delete board
                       </DropdownMenuItem>
@@ -480,12 +523,12 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                       <DropdownMenuItem onClick={() => tasks.openEditBoardModal(tasks.activeBoardId)}>
                         Edit board
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => void handleCopyBoard(tasks.activeBoardId, true)}>
+                      <DropdownMenuItem onClick={() => requestCopyBoard(tasks.activeBoardId, true)}>
                         Copy board
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"
-                        onClick={() => void handleDeleteBoard(tasks.activeBoardId)}
+                        onClick={() => requestDeleteBoard(tasks.activeBoardId)}
                       >
                         Delete board
                       </DropdownMenuItem>
@@ -643,12 +686,12 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                                 <DropdownMenuItem onClick={() => tasks.openEditBoardModal(board.id)}>
                                   Edit board
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => void handleCopyBoard(board.id)}>
+                                <DropdownMenuItem onClick={() => requestCopyBoard(board.id)}>
                                   Copy board
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   variant="destructive"
-                                  onClick={() => void handleDeleteBoard(board.id)}
+                                  onClick={() => requestDeleteBoard(board.id)}
                                 >
                                   Delete board
                                 </DropdownMenuItem>
@@ -682,12 +725,16 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
 
             <div className="grid min-h-0 flex-1 gap-4 overflow-hidden px-3 py-4 sm:px-4 lg:grid-cols-[1fr_340px] lg:px-6">
               <div className="min-h-0 overflow-auto">
+                <FailedTicketsBucket
+                  onRetry={(ticketId) => tasks.retryFromNeedsRetry(ticketId)}
+                  onOpenTicket={(ticketId) => tasks.openDetailsModal(ticketId)}
+                />
                 <div className="flex flex-wrap items-center gap-1.5 pb-3">
                   {(() => {
                     const allTickets = Object.values(tasks.board.tickets);
                     const queued = allTickets.filter((ticket) => ticket.executionState === "ready_to_execute").length;
                     const running = allTickets.filter((ticket) => ticket.executionState === "executing" || ticket.executionState === "done").length;
-                    const failed = allTickets.filter((ticket) => ticket.executionState === "failed").length;
+                    const failed = allTickets.filter((ticket) => ticket.executionState === "failed" || ticket.executionState === "needs_retry" || ticket.executionState === "expired").length;
                     const blocked = allTickets.filter((ticket) => (ticket.executionState === "open" || ticket.executionState === "planning" || ticket.executionState === "awaiting_approval") && !ticket.assignedAgentId).length;
                     return (
                       <>
@@ -908,6 +955,51 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
         onKeepEditing={tasks.keepEditing}
         onDiscard={tasks.discardChanges}
       />
+
+      {/* Delete board confirmation */}
+      <AlertDialog open={!!deleteBoardId} onOpenChange={(open) => { if (!open) setDeleteBoardId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2Icon className="size-5 text-destructive" />
+              Delete board
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <span className="font-semibold text-foreground">{deleteBoardName}</span>? All tickets, lists, and activity in this board will be permanently removed. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmDeleteBoard()}
+            >
+              Delete board
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Copy board confirmation */}
+      <AlertDialog open={!!copyBoardId} onOpenChange={(open) => { if (!open) setCopyBoardId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CopyIcon className="size-5 text-primary" />
+              Copy board
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will create a duplicate of <span className="font-semibold text-foreground">{copyBoardName}</span> including all lists and tickets. Continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmCopyBoard()}>
+              Copy board
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SidebarProvider>
   );
 }

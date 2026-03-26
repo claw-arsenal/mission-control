@@ -35,7 +35,7 @@ const data = {
     { title: "Agenda", url: "/agenda", icon: IconCalendar },
     { title: "Processes", url: "/processes", icon: IconStack2 },
     { title: "Agents", url: "/agents", icon: IconRobot },
-    { title: "Logs", url: "/logs", icon: IconLogs },
+    { title: "System", url: "/logs", icon: IconLogs },
     { title: "Settings", url: "/settings", icon: IconSettings },
   ],
 }

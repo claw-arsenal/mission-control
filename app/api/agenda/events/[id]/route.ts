@@ -75,9 +75,32 @@ export async function PATCH(
     `;
     if (!existing) return fail("Event not found.", 404);
 
-    // ── Recurring edit scope handling ──────────────────────────────────────────
+    // ── Check for running occurrences ──────────────────────────────────────────
     const editScope = body.editScope as string | undefined;
     const occurrenceId = body.occurrenceId as string | undefined;
+
+    const [runningOcc] = await sql`
+      SELECT id FROM agenda_occurrences
+      WHERE agenda_event_id = ${id} AND status = 'running'
+      LIMIT 1
+    `;
+    if (runningOcc) {
+      // For single-occurrence edits, only block if that specific occurrence is running
+      if (editScope === "single" && occurrenceId) {
+        const [thisRunning] = await sql`
+          SELECT id FROM agenda_occurrences
+          WHERE id = ${occurrenceId} AND status = 'running'
+          LIMIT 1
+        `;
+        if (thisRunning) {
+          return fail("Cannot edit event while executing", 409);
+        }
+      } else {
+        return fail("Cannot edit event while executing", 409);
+      }
+    }
+
+    // ── Recurring edit scope handling ──────────────────────────────────────────
 
     if (editScope === "single" && occurrenceId) {
       // Create/update an occurrence override for just this one instance
@@ -112,6 +135,7 @@ export async function PATCH(
         `;
       }
 
+      await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "update" })})`;
       return ok({ eventId: id, scope: "single", occurrenceId });
     }
 
@@ -176,6 +200,7 @@ export async function PATCH(
         }
       }
 
+      await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "update" })})`;
       return ok({ eventId: id, newEventId: newEvent.id, scope: "this_and_future" });
     }
 
@@ -221,6 +246,7 @@ export async function PATCH(
       }
     }
 
+    await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "update" })})`;
     return ok({ eventId: id });
   } catch (error) {
     return fail(error instanceof Error ? error.message : "Failed to update event", 500);
@@ -238,11 +264,33 @@ export async function DELETE(
     if (!wid) return fail("Workspace not found", 500);
 
     const [existing] = await sql`
-      select id from agenda_events where id = ${id} and workspace_id = ${wid} limit 1
+      select id, recurrence_rule from agenda_events where id = ${id} and workspace_id = ${wid} limit 1
     `;
     if (!existing) return fail("Event not found.", 404);
 
-    await sql`delete from agenda_events where id = ${id}`;
+    const isRecurring = existing.recurrence_rule && existing.recurrence_rule !== "null" && existing.recurrence_rule !== "none";
+
+    if (isRecurring) {
+      // Cancel all future occurrences, keep past ones for history
+      await sql`
+        UPDATE agenda_occurrences SET status = 'cancelled'
+        WHERE agenda_event_id = ${id} AND scheduled_for > now()
+          AND status IN ('scheduled', 'queued', 'needs_retry')
+      `;
+      // Delete future occurrences that never ran
+      await sql`
+        DELETE FROM agenda_occurrences
+        WHERE agenda_event_id = ${id} AND scheduled_for > now()
+          AND status = 'cancelled' AND latest_attempt_no = 0
+      `;
+      // Deactivate the event so scheduler stops creating new occurrences
+      await sql`UPDATE agenda_events SET status = 'draft', recurrence_until = now(), updated_at = now() WHERE id = ${id}`;
+    } else {
+      // Non-recurring: delete entirely (cascades to occurrences, attempts, steps)
+      await sql`delete from agenda_events where id = ${id}`;
+    }
+
+    await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "delete" })})`;
     return ok();
   } catch (error) {
     return fail(error instanceof Error ? error.message : "Failed to delete event", 500);

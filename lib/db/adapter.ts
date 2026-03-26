@@ -42,7 +42,9 @@ export type TicketExecutionState =
   | "queued"
   | "picked_up"
   | "running"
-  | "draft";
+  | "draft"
+  | "needs_retry"
+  | "expired";
 
 export type TicketLifecycleState = TicketExecutionState;
 
@@ -65,6 +67,8 @@ export type TicketRecord = {
   scheduledFor: string | null;
   executionState: TicketExecutionState;
   processVersionIds: string[];
+  executionWindowMinutes: number;
+  fallbackModel: string;
   checklistDone: number;
   checklistTotal: number;
   attachmentsCount: number;
@@ -134,6 +138,8 @@ export type UpdateTicketPatch = {
   scheduledFor?: string | null;
   executionState?: TicketExecutionState;
   processVersionIds?: string[];
+  executionWindowMinutes?: number;
+  fallbackModel?: string;
   checklistDone?: number;
   checklistTotal?: number;
   attachmentsCount?: number;

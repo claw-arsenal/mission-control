@@ -168,6 +168,16 @@ export function AgendaClientWrapper() {
     setEventModalOpen(true);
   };
 
+  const handleCopyEvent = useCallback((event: AgendaEventSummary) => {
+    // Open the create modal pre-filled with the copied event's data (no editingEvent = creates new)
+    setEditingEvent(null);
+    setEditingFormData({
+      ...buildFormFromEvent(event),
+      title: `${event.title} (copy)`,
+    });
+    setEventModalOpen(true);
+  }, []);
+
   const handleDayClick = useCallback((date: Date) => {
     const dateStr = date.toISOString().split("T")[0]; // yyyy-MM-dd
     setEditingEvent(null);
@@ -303,11 +313,10 @@ export function AgendaClientWrapper() {
         toast.error(json.error ?? "Failed to update event");
       }
     } else {
-      const startsAt = data.startDate && data.startTime
-        ? buildTzAwareISO(data.startDate, data.startTime, tz)
-        : data.startDate
-          ? buildTzAwareISO(data.startDate, "10:00", tz)
-          : null;
+      // Default to today if no startDate (e.g. repeatable "starts now")
+      const effectiveStartDate = data.startDate || new Date().toISOString().split("T")[0];
+      const effectiveStartTime = data.startTime || "10:00";
+      const startsAt = buildTzAwareISO(effectiveStartDate, effectiveStartTime, tz);
       const endsAt = data.endDate
         ? buildTzAwareISO(data.endDate, data.endTime || "10:00", tz)
         : null;
@@ -357,12 +366,13 @@ export function AgendaClientWrapper() {
 
   return (
     <>
-      <div className="@container/main flex flex-1 flex-col">
-        <div className="flex flex-col gap-4 pt-4 md:gap-6">
+      <div className="@container/main flex flex-1 flex-col overflow-auto">
+        <div className="flex flex-col gap-4 pt-4 pb-6 md:gap-6">
           <AgendaStatsCards />
           <div className="px-4 lg:px-6">
             <AgendaPageClient
               onEditEvent={openEditEventModal}
+              onCopyEvent={handleCopyEvent}
               onDeleteEvent={handleDeleteEvent}
               onDayClick={handleDayClick}
               onEventDrop={handleEventDrop}

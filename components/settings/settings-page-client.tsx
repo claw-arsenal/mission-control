@@ -1,7 +1,7 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   IconSun,
   IconMoon,
@@ -12,9 +12,11 @@ import {
   IconAlertTriangle,
   IconCircleCheck,
   IconLoader2,
+  IconSettings,
 } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -76,11 +78,39 @@ export function SettingsPageClient() {
   const [notifEnabled, setNotifEnabled] = useState(true);
   const [notifSound, setNotifSound] = useState(true);
 
+  // Agenda settings
+  const [agendaConcurrency, setAgendaConcurrency] = useState(5);
+  const [defaultExecWindow, setDefaultExecWindow] = useState(30);
+  const [agendaSettingsLoading, setAgendaSettingsLoading] = useState(false);
+  const agendaMountedRef = useRef(false);
+
   useEffect(() => {
     setMounted(true);
     const s = loadNotificationSettings();
     setNotifEnabled(s.enabled);
     setNotifSound(s.sound);
+  }, []);
+
+  // Load agenda settings
+  useEffect(() => {
+    if (agendaMountedRef.current) return;
+    agendaMountedRef.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "getWorkerSettings" }),
+          cache: "reload",
+        });
+        const json = await res.json();
+        if (json.ok && json.workerSettings) {
+          setAgendaConcurrency(json.workerSettings.agendaConcurrency ?? 5);
+          setDefaultExecWindow(json.workerSettings.defaultExecutionWindowMinutes ?? 30);
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { agendaMountedRef.current = false; };
   }, []);
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -279,6 +309,81 @@ export function SettingsPageClient() {
               <span>🔴 System errors</span>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Agenda Settings ──────────────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <IconSettings className="size-5 text-primary" />
+            Agenda Settings
+          </CardTitle>
+          <CardDescription>Configure agenda worker behavior</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="agenda-concurrency" className="text-sm font-semibold">
+                Concurrency
+              </Label>
+              <p className="text-xs text-muted-foreground">Max parallel agenda jobs (1–10)</p>
+              <Input
+                id="agenda-concurrency"
+                type="number"
+                min={1}
+                max={10}
+                value={agendaConcurrency}
+                onChange={(e) => setAgendaConcurrency(Math.max(1, Math.min(10, parseInt(e.target.value) || 5)))}
+                className="h-9 w-24"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="default-exec-window" className="text-sm font-semibold">
+                Retry Window (minutes)
+              </Label>
+              <p className="text-xs text-muted-foreground">If a task is this many minutes late, it goes to retry instead of auto-running</p>
+              <Input
+                id="default-exec-window"
+                type="number"
+                min={1}
+                max={1440}
+                value={defaultExecWindow}
+                onChange={(e) => setDefaultExecWindow(Math.max(1, Math.min(1440, parseInt(e.target.value) || 30)))}
+                className="h-9 w-24"
+              />
+            </div>
+          </div>
+          <Button
+            variant="default"
+            size="sm"
+            disabled={agendaSettingsLoading}
+            className="w-fit cursor-pointer"
+            onClick={async () => {
+              setAgendaSettingsLoading(true);
+              try {
+                const res = await fetch("/api/tasks", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    action: "updateWorkerSettings",
+                    agendaConcurrency,
+                    defaultExecutionWindowMinutes: defaultExecWindow,
+                  }),
+                });
+                const json = await res.json();
+                if (json.ok) toast.success("Agenda settings saved");
+                else toast.error(json.error || "Failed to save");
+              } catch {
+                toast.error("Failed to save agenda settings");
+              } finally {
+                setAgendaSettingsLoading(false);
+              }
+            }}
+          >
+            {agendaSettingsLoading ? <IconLoader2 className="size-4 animate-spin mr-1" /> : null}
+            Save Agenda Settings
+          </Button>
         </CardContent>
       </Card>
 

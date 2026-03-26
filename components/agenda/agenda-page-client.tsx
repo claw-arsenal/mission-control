@@ -1,14 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { format, endOfMonth } from "date-fns";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  format,
+  startOfMonth, endOfMonth,
+  startOfWeek, endOfWeek,
+  startOfDay, endOfDay,
+} from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgendaDetailsSheet, type AgendaEventSummary } from "@/components/agenda/agenda-details-sheet";
 import { CustomMonthAgenda, type AgendaCalendarEvent, type ViewMode } from "@/components/agenda/custom-month-agenda";
+import { AgendaFailedDialog } from "@/components/agenda/agenda-failed-bucket";
 import { useAgenda } from "@/hooks/use-agenda";
 
 type Props = {
   onEditEvent?: (event: AgendaEventSummary) => void;
+  onCopyEvent?: (event: AgendaEventSummary) => void;
   onDeleteEvent?: (eventId: string) => void;
   onAddEvent?: () => void;
   onDayClick?: (date: Date) => void;
@@ -16,26 +23,101 @@ type Props = {
   agentsForDetails?: { id: string; name: string }[];
 };
 
-export function AgendaPageClient({ onEditEvent, onDeleteEvent, onAddEvent, onDayClick, onEventDrop, agentsForDetails }: Props) {
+export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAddEvent, onDayClick, onEventDrop, agentsForDetails }: Props) {
   const { calendarEvents, loading, loadEvents } = useAgenda();
   const [detailsSheetOpen, setDetailsSheetOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<AgendaEventSummary | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [failedCount, setFailedCount] = useState(0);
+  const [failedDialogOpen, setFailedDialogOpen] = useState(false);
 
-  // Re-fetch when month changes
+  // Compute the visible date range based on view mode
+  const { rangeStart, rangeEnd } = useMemo(() => {
+    if (viewMode === "month") {
+      // Month grid shows from start-of-week of month start to end-of-week of month end
+      const ms = startOfMonth(currentDate);
+      const me = endOfMonth(currentDate);
+      return {
+        rangeStart: format(startOfWeek(ms, { weekStartsOn: 1 }), "yyyy-MM-dd"),
+        rangeEnd: format(endOfWeek(me, { weekStartsOn: 1 }), "yyyy-MM-dd"),
+      };
+    }
+    if (viewMode === "week") {
+      const ws = startOfWeek(currentDate, { weekStartsOn: 1 });
+      const we = endOfWeek(currentDate, { weekStartsOn: 1 });
+      return {
+        rangeStart: format(ws, "yyyy-MM-dd"),
+        rangeEnd: format(we, "yyyy-MM-dd"),
+      };
+    }
+    // day view
+    return {
+      rangeStart: format(startOfDay(currentDate), "yyyy-MM-dd"),
+      rangeEnd: format(endOfDay(currentDate), "yyyy-MM-dd"),
+    };
+  }, [currentDate, viewMode]);
+
+  // Re-fetch when visible range changes
   useEffect(() => {
-    const start = format(currentDate, "yyyy-MM-dd");
-    const end = format(endOfMonth(currentDate), "yyyy-MM-dd");
-    void loadEvents(start, end);
-  }, [currentDate, loadEvents]);
+    void loadEvents(rangeStart, rangeEnd);
+  }, [rangeStart, rangeEnd, loadEvents]);
 
   // External refresh events (after create/edit/delete)
   useEffect(() => {
-    const handler = () => { void loadEvents(); };
+    const handler = () => { void loadEvents(); void checkFailed(); };
     document.addEventListener("agenda-refresh", handler);
     return () => document.removeEventListener("agenda-refresh", handler);
   }, [loadEvents]);
+
+  // ── SSE: live updates via PostgreSQL LISTEN/NOTIFY ──────────────────────────
+  const sseRef = useRef<EventSource | null>(null);
+  const sseStartedRef = useRef(false);
+
+  const checkFailed = useCallback(async () => {
+    try {
+      const res = await fetch("/api/agenda/failed", { cache: "reload" });
+      const json = await res.json();
+      if (json.ok) setFailedCount((json.occurrences ?? []).length);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (sseStartedRef.current) return;
+    sseStartedRef.current = true;
+
+    // Initial failed count fetch
+    void checkFailed();
+
+    const connect = () => {
+      const es = new EventSource("/api/agenda/events/stream");
+      sseRef.current = es;
+
+      es.addEventListener("agenda_change", () => {
+        void loadEvents();
+        void checkFailed();
+      });
+
+      es.onerror = () => {
+        // Auto-reconnect after 5s on error
+        es.close();
+        sseRef.current = null;
+        setTimeout(() => {
+          if (sseStartedRef.current) connect();
+        }, 5_000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      sseStartedRef.current = false;
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+    };
+  }, [loadEvents, checkFailed]);
 
   // Convert FullCalendar EventInput[] → AgendaCalendarEvent[]
   const eventsForCalendar: AgendaCalendarEvent[] = calendarEvents.map((e) => {
@@ -63,7 +145,7 @@ export function AgendaPageClient({ onEditEvent, onDeleteEvent, onAddEvent, onDay
   const [sheetKey, setSheetKey] = useState(0);
 
   const handleEventClick = useCallback(
-    async (eventId: string) => {
+    async (eventId: string, occurrenceDate?: string) => {
       // Close any existing sheet first to force remount
       setDetailsSheetOpen(false);
       setSelectedEvent(null);
@@ -91,18 +173,32 @@ export function AgendaPageClient({ onEditEvent, onDeleteEvent, onAddEvent, onDay
         const rawRecurrence = evt.recurrence_rule ?? "none";
         const recurrenceInfo = parseRecurrenceRule(rawRecurrence);
 
-        const { date: startDate, time: startTime } = extractDateTimeFields(evt.starts_at, timezone);
-        const { date: endDate, time: endTime } = extractDateTimeFields(evt.ends_at, timezone);
+        // For recurring events, show the clicked occurrence date instead of the series start
+        const isRecurring = rawRecurrence !== "none";
 
+        // Find the occurrence matching the clicked date
         let occurrenceId: string | undefined;
-        if (rawRecurrence !== "none" && evtOccurrences.length > 0) {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          const matching = evtOccurrences
-            .filter((o) => new Date(o.scheduled_for) >= today)
-            .sort((a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime());
-          occurrenceId = matching[0]?.id;
+        if (isRecurring && evtOccurrences.length > 0 && occurrenceDate) {
+          // Match occurrence by comparing scheduled_for date in the event's timezone
+          const matchingOcc = evtOccurrences.find((o) => {
+            const { date: occDate } = extractDateTimeFields(o.scheduled_for, timezone);
+            return occDate === occurrenceDate;
+          });
+          if (matchingOcc) {
+            occurrenceId = matchingOcc.id;
+          }
         }
+        // For non-recurring: pick the latest occurrence
+        if (!occurrenceId && !isRecurring && evtOccurrences.length > 0) {
+          occurrenceId = evtOccurrences[0]?.id;
+        }
+
+        // Schedule display: for recurring events, always use the clicked date
+        // so clicking Mar 29 shows Mar 29, not Mar 27
+        const { time: eventTime } = extractDateTimeFields(evt.starts_at, timezone);
+        const startDate = (isRecurring && occurrenceDate) ? occurrenceDate : extractDateTimeFields(evt.starts_at, timezone).date;
+        const startTime = eventTime;
+        const { date: endDate, time: endTime } = extractDateTimeFields(evt.ends_at, timezone);
 
         const summary: AgendaEventSummary = {
           id: String(evt.id ?? ""),
@@ -158,7 +254,7 @@ export function AgendaPageClient({ onEditEvent, onDeleteEvent, onAddEvent, onDay
 
   return (
     <>
-      <Card className="flex-1 overflow-hidden border-2 shadow-lg rounded-2xl py-0">
+      <Card className="border-2 shadow-lg rounded-2xl py-0">
         <CardContent className="p-5">
           <CustomMonthAgenda
             events={eventsForCalendar}
@@ -171,9 +267,19 @@ export function AgendaPageClient({ onEditEvent, onDeleteEvent, onAddEvent, onDay
             onDayClick={onDayClick}
             onEventDrop={onEventDrop}
             onAddEvent={onAddEvent}
+            failedCount={failedCount}
+            onOpenFailed={() => setFailedDialogOpen(true)}
           />
         </CardContent>
       </Card>
+
+      <AgendaFailedDialog
+        open={failedDialogOpen}
+        onOpenChange={(open) => {
+          setFailedDialogOpen(open);
+          if (!open) void checkFailed();
+        }}
+      />
 
       <AgendaDetailsSheet
         key={sheetKey}
@@ -182,6 +288,7 @@ export function AgendaPageClient({ onEditEvent, onDeleteEvent, onAddEvent, onDay
         agents={agentsForDetails}
         onClose={() => { setDetailsSheetOpen(false); setSelectedEvent(null); }}
         onEdit={onEditEvent ?? (() => {})}
+        onCopy={onCopyEvent}
         onRetry={handleRetry}
         onDelete={onDeleteEvent ?? (() => {})}
       />

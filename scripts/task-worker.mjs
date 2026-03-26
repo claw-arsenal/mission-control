@@ -17,6 +17,8 @@ if (!connectionString) {
   process.exit(1);
 }
 
+const TW_SERVICE_NAME = "task-worker";
+
 const redisConnection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: Number(process.env.REDIS_PORT || 6379),
@@ -30,8 +32,7 @@ let settingsTimer = null;
 let ticketWorker = null;
 let notifyListenerActive = false;
 const myQueue = process.env.WORKER_QUEUE || "default";
-const MAX_RETRIES = 3;
-const BACKOFF_SECONDS = [30, 120, 480];
+// Retry logic: 1 instant retry + 1 fallback retry = max 3 attempts total
 let latestSettings = { enabled: true, pollIntervalSeconds: 20, maxConcurrency: 3 };
 
 let _openclawConfig = null;
@@ -188,8 +189,7 @@ async function extractAndAttachFiles(ticketId, responseText) {
   return attached;
 }
 
-async function getRetryCount(ticketId) { const rows = await sql`select count(*)::int as n from ticket_activity where ticket_id = ${ticketId}::uuid and event = 'Failed' and source = 'Worker'`; return Number(rows[0]?.n ?? 0); }
-async function scheduleRetry(ticketId, retryCount) { const backoffSec = BACKOFF_SECONDS[Math.min(retryCount, BACKOFF_SECONDS.length - 1)]; const scheduledFor = new Date(Date.now() + backoffSec * 1000).toISOString(); await sql`update tickets set execution_state='queued', scheduled_for=${scheduledFor}, updated_at=now() where id=${ticketId}::uuid`; await writeActivity(ticketId, "Retry scheduled", `Retry ${retryCount + 1}/${MAX_RETRIES} scheduled in ${backoffSec}s.`, "warning"); }
+
 async function generatePlan(ticket, wid) { await sql`update tickets set execution_state='planning', updated_at=now() where id=${ticket.id}::uuid`; await writeActivity(ticket.id, "Planning", "Generating plan for approval.", "info"); const [subtaskRows, commentRows, processRows] = await Promise.all([
     sql`select title, completed from ticket_subtasks where ticket_id = ${ticket.id}::uuid order by position asc, created_at asc`,
     sql`select content, author_name, created_at from ticket_comments where ticket_id = ${ticket.id}::uuid order by created_at asc limit 10`,
@@ -210,8 +210,29 @@ for (const r of processRows) {
   g.steps.push(r);
 }
 const prompt = buildTicketPrompt(ticket, subtaskRows, commentRows, grouped, "Create an execution plan only.\nDo not execute anything.\nReturn a concise numbered plan plus acceptance criteria."); let agentId = "planner"; const args = ["agent", "--agent", agentId, "--message", prompt, "--json"]; const chatId = ticket.telegram_chat_id ?? await getRecentChatId(wid, agentId); try { if ((await sql`select id from agents where workspace_id = ${wid} and openclaw_agent_id = ${agentId} limit 1`).length === 0) args[2] = "main"; const { stdout } = await execFileAsync("openclaw", args, { timeout: 5 * 60 * 1000, env: process.env }); const result = JSON.parse(stdout); const payloads = result?.payloads ?? []; const planText = payloads.map(p => p.text ?? '').join('\n').trim() || result?.text || result?.reply || JSON.stringify(result); await sql`insert into ticket_activity (ticket_id, source, event, details, level) values (${ticket.id}::uuid, 'planner', 'Plan generated', ${planText}, 'info')`; await sql`update tickets set plan_text=${planText}, approval_state='pending', execution_state='awaiting_approval', plan_generated_at=now(), updated_at=now() where id=${ticket.id}::uuid`; await writeActivity(ticket.id, "Plan ready", "Waiting for user approval.", "info"); await sendTelegramMessage(ticket, `Plan ready for "${ticket.title}"\n\n${planText}\n\nApprove in Mission Control to start execution.`, chatId); } catch (error) { await writeActivity(ticket.id, "Planning failed", error.message, "error"); await sendTelegramMessage(ticket, `❌ Planning failed for "${ticket.title}": ${error.message}`, chatId); await sql`update tickets set execution_state='failed', updated_at=now() where id=${ticket.id}::uuid`; } }
-async function handleFailureWithRetry(ticketId, ticket) { const retryCount = await getRetryCount(ticketId); if (retryCount < MAX_RETRIES) await scheduleRetry(ticketId, retryCount); else await sql`update tickets set execution_state='failed', updated_at=now() where id=${ticketId}::uuid`; }
-async function executeTicket(ticket, boardId, wid) { const ticketId=ticket.id; let agentId=ticket.assigned_agent_id; const agentRows = await sql`select id from agents where workspace_id = ${wid} and openclaw_agent_id = ${agentId} limit 1`; if (agentRows.length===0) agentId='main'; const chatIdForDelivery = ticket.telegram_chat_id ?? await getRecentChatId(wid, agentId); const latestRows = await sql`select execution_state, column_id from tickets where id=${ticketId}::uuid limit 1`; const latest = latestRows[0]; if (!latest || ['done','executing'].includes(latest.execution_state)) return; await sql`update tickets set execution_state='executing', updated_at=now() where id=${ticketId}::uuid and execution_state not in ('done','executing')`; await writeActivity(ticketId, "Picked up", "Worker picked up ticket.", "info"); await sendTelegramMessage(ticket, `🚀 Starting execution of "${ticket.title}"`, chatIdForDelivery); const [subtaskRows, commentRows, processRows] = await Promise.all([
+async function markNeedsRetry(ticketId, ticket) {
+  await sql`update tickets set execution_state='needs_retry', updated_at=now() where id=${ticketId}::uuid`;
+  await writeActivity(ticketId, "Needs retry", "All retries exhausted — needs manual retry.", "warning");
+  const chatId = ticket.telegram_chat_id ?? await getRecentChatId(await workspaceId(), ticket.assigned_agent_id || 'main');
+  await sendTelegramMessage(ticket, `⚠️ Ticket "${ticket.title}" needs manual retry (all retries exhausted)`, chatId);
+}
+async function executeTicket(ticket, boardId, wid) { const ticketId=ticket.id; let agentId=ticket.assigned_agent_id; const agentRows = await sql`select id from agents where workspace_id = ${wid} and openclaw_agent_id = ${agentId} limit 1`; if (agentRows.length===0) agentId='main'; const chatIdForDelivery = ticket.telegram_chat_id ?? await getRecentChatId(wid, agentId);
+  // Execution window check
+  const scheduledFor = ticket.scheduled_for ? new Date(ticket.scheduled_for) : null;
+  const windowMinutes = ticket.execution_window_minutes || 60;
+  if (scheduledFor) {
+    const diffMinutes = (Date.now() - scheduledFor.getTime()) / 60000;
+    if (diffMinutes > windowMinutes) {
+      await sql`UPDATE tickets SET execution_state = 'expired', updated_at = now() WHERE id = ${ticketId}::uuid`;
+      await writeActivity(ticketId, "Expired", `Missed execution window (${windowMinutes}min)`, "warning");
+      await sendTelegramMessage(ticket, `⏰ Ticket "${ticket.title}" expired — missed ${windowMinutes}min execution window`, chatIdForDelivery);
+      return;
+    }
+  }
+  // Postgres claim lock
+  const [claimed] = await sql`UPDATE tickets SET execution_state = 'executing', updated_at = now() WHERE id = ${ticketId}::uuid AND execution_state IN ('queued', 'ready_to_execute', 'picked_up') RETURNING id`;
+  if (!claimed) { console.log(`[task-worker] Ticket ${ticketId} already claimed, skipping`); return; }
+  await writeActivity(ticketId, "Picked up", "Worker picked up ticket.", "info"); await sendTelegramMessage(ticket, `🚀 Starting execution of "${ticket.title}"`, chatIdForDelivery); const [subtaskRows, commentRows, processRows] = await Promise.all([
     sql`select title, completed from ticket_subtasks where ticket_id = ${ticketId}::uuid order by position asc, created_at asc`,
     sql`select content, author_name, created_at from ticket_comments where ticket_id = ${ticketId}::uuid order by created_at asc limit 20`,
     ticket.process_version_ids?.length ? sql`
@@ -230,13 +251,79 @@ for (const r of processRows) {
   if (!g) { g = { process_name: r.process_name, process_description: r.process_description, steps: [] }; grouped.push(g); }
   g.steps.push(r);
 }
-const prompt = buildTicketPrompt(ticket, subtaskRows, commentRows, grouped, 'Execute the above ticket. Report progress via activity tools and mark completion when done.'); const args = ["agent", "--agent", agentId, "--message", prompt, "--json"]; let result; try { const { stdout } = await execFileAsync("openclaw", args, { timeout: 10 * 60 * 1000, env: process.env }); const parsed = JSON.parse(stdout); const inner = parsed?.result ?? parsed; const rawPayloads = Array.isArray(inner?.payloads) ? inner.payloads : []; result = { success: true, result: parsed, _rawPayloads: rawPayloads }; } catch (error) { result = { success: false, error: error.message }; } if (result.success) { const payloads = result._rawPayloads; const responseText = payloads.map(p => p.text ?? '').join('\n').trim(); if (responseText) await sql`insert into ticket_activity (ticket_id, source, event, details, level) values (${ticketId}::uuid, ${agentId}, 'Agent response', ${responseText}, 'info')`; await extractAndAttachFiles(ticketId, responseText); if (chatIdForDelivery && responseText) await sendTelegramMessage(ticket, responseText, chatIdForDelivery); const completedIds = await getColumnIdsByTitle(boardId, ["completed", "done"]); const completedColumnId = completedIds[0] ?? null; if (completedColumnId) await sql`update tickets set execution_state='done', column_id=${completedColumnId}::uuid, updated_at=now() where id=${ticketId}::uuid`; else await sql`update tickets set execution_state='done', updated_at=now() where id=${ticketId}::uuid`; await writeActivity(ticketId, "Completed", `Agent "${agentId}" completed successfully.`, "success"); } else { await writeActivity(ticketId, "Failed", `Agent "${agentId}" failed: ${result.error}`, "error"); await handleFailureWithRetry(ticketId, ticket); const retryCount = await getRetryCount(ticketId); if (chatIdForDelivery) await sendTelegramMessage(ticket, retryCount >= MAX_RETRIES ? `❌ Ticket "${ticket.title}" failed after ${MAX_RETRIES} retries: ${result.error}` : `⚠️ Ticket "${ticket.title}" failed, retrying in ${BACKOFF_SECONDS[Math.min(retryCount - 1, BACKOFF_SECONDS.length - 1)]}s (attempt ${retryCount}/${MAX_RETRIES})`, chatIdForDelivery); } }
-async function handleTicket(ticket, boardId, wid) { try { if (ticket.execution_mode === 'planned' && ticket.approval_state !== 'approved') { if (!ticket.plan_text) await generatePlan(ticket, wid); else await sql`update tickets set execution_state='awaiting_approval', updated_at=now() where id=${ticket.id}::uuid and execution_state != 'awaiting_approval'`; return; } await executeTicket(ticket, boardId, wid); } catch (error) { await writeActivity(ticket.id, "Worker error", String(error.message || error), "error"); await handleFailureWithRetry(ticket.id, ticket); } }
+const prompt = buildTicketPrompt(ticket, subtaskRows, commentRows, grouped, 'Execute the above ticket. Report progress via activity tools and mark completion when done.'); const args = ["agent", "--agent", agentId, "--message", prompt, "--json"]; let result; try { const { stdout } = await execFileAsync("openclaw", args, { timeout: 10 * 60 * 1000, env: process.env }); const parsed = JSON.parse(stdout); const inner = parsed?.result ?? parsed; const rawPayloads = Array.isArray(inner?.payloads) ? inner.payloads : []; result = { success: true, result: parsed, _rawPayloads: rawPayloads }; } catch (error) { result = { success: false, error: error.message }; }
+  // ── Inline retry logic (no backoff) ──────────────────────────────────
+  if (!result.success) {
+    // Instant retry
+    console.log(`[task-worker] First attempt failed for ${ticketId}, instant retry...`);
+    await writeActivity(ticketId, "Retry", "First attempt failed, retrying immediately...", "warning");
+    try {
+      const { stdout } = await execFileAsync("openclaw", args, { timeout: 10 * 60 * 1000, env: process.env });
+      const parsed = JSON.parse(stdout);
+      const inner = parsed?.result ?? parsed;
+      const rawPayloads = Array.isArray(inner?.payloads) ? inner.payloads : [];
+      result = { success: true, result: parsed, _rawPayloads: rawPayloads };
+    } catch (retryErr) {
+      result = { success: false, error: retryErr.message };
+    }
+  }
+
+  // Fallback model retry if still failing
+  if (!result.success && ticket.fallback_model) {
+    console.log(`[task-worker] Retry failed for ${ticketId}, trying fallback model: ${ticket.fallback_model}`);
+    await writeActivity(ticketId, "Fallback retry", `Retrying with fallback model: ${ticket.fallback_model}`, "warning");
+    const fallbackArgs = ["agent", "--agent", agentId, "--model", ticket.fallback_model, "--message", prompt, "--json"];
+    try {
+      const { stdout } = await execFileAsync("openclaw", fallbackArgs, { timeout: 10 * 60 * 1000, env: process.env });
+      const parsed = JSON.parse(stdout);
+      const inner = parsed?.result ?? parsed;
+      const rawPayloads = Array.isArray(inner?.payloads) ? inner.payloads : [];
+      result = { success: true, result: parsed, _rawPayloads: rawPayloads };
+      await writeActivity(ticketId, "Fallback model used", `Switched to ${ticket.fallback_model} after retry failures.`, "warning");
+    } catch (fbError) {
+      result = { success: false, error: fbError.message };
+    }
+  }
+
+  if (result.success) {
+    const payloads = result._rawPayloads;
+    const responseText = payloads.map(p => p.text ?? '').join('\n').trim();
+    if (responseText) await sql`insert into ticket_activity (ticket_id, source, event, details, level) values (${ticketId}::uuid, ${agentId}, 'Agent response', ${responseText}, 'info')`;
+    await extractAndAttachFiles(ticketId, responseText);
+    if (chatIdForDelivery && responseText) await sendTelegramMessage(ticket, responseText, chatIdForDelivery);
+    const completedIds = await getColumnIdsByTitle(boardId, ["completed", "done"]);
+    const completedColumnId = completedIds[0] ?? null;
+    if (completedColumnId) await sql`update tickets set execution_state='done', column_id=${completedColumnId}::uuid, updated_at=now() where id=${ticketId}::uuid`;
+    else await sql`update tickets set execution_state='done', updated_at=now() where id=${ticketId}::uuid`;
+    await writeActivity(ticketId, "Completed", `Agent "${agentId}" completed successfully.`, "success");
+  } else {
+    await writeActivity(ticketId, "Failed", `Agent "${agentId}" failed: ${result.error}`, "error");
+    await markNeedsRetry(ticketId, ticket);
+    if (chatIdForDelivery) await sendTelegramMessage(ticket, `⚠️ Ticket "${ticket.title}" needs manual retry (all retries exhausted)`, chatIdForDelivery);
+  } }
+async function handleTicket(ticket, boardId, wid) { try { if (ticket.execution_mode === 'planned' && ticket.approval_state !== 'approved') { if (!ticket.plan_text) await generatePlan(ticket, wid); else await sql`update tickets set execution_state='awaiting_approval', updated_at=now() where id=${ticket.id}::uuid and execution_state != 'awaiting_approval'`; return; } await executeTicket(ticket, boardId, wid); } catch (error) { await writeActivity(ticket.id, "Worker error", String(error.message || error), "error"); await markNeedsRetry(ticket.id, ticket); } }
 async function promoteAutoApprove(wid, queueName) { const rows = await sql`select id, board_id from tickets where workspace_id = ${wid}::uuid and queue_name = ${queueName} and auto_approve = true and (execution_state = 'open' or execution_state = 'pending') and (scheduled_for is null or scheduled_for <= now()) limit 100`; for (const row of rows) { const inProgressIds = await getColumnIdsByTitle(row.board_id, ["in progress", "doing"]); const toColumnId = inProgressIds[0]; if (!toColumnId) continue; await sql`update tickets set column_id=${toColumnId}::uuid, execution_state='queued', approval_state='approved', approved_by='auto', approved_at=now(), updated_at=now() where id=${row.id}::uuid`; await writeActivity(row.id, "Auto approved", "Auto-approved and queued by worker.", "info"); await enqueueTicket(row.id, { source: "auto-approve" }); } }
 async function processJob(job) { const wid = await workspaceId(); if (!wid) return { skipped: true }; const settings = await getSettings(); if (!settings.enabled) return { skipped: true }; await promoteAutoApprove(wid, myQueue); const ticketId = String(job.data?.ticketId || job.id?.replace(/^ticket-/, "") || ""); if (!ticketId) return { skipped: true }; const rows = await sql`select t.*, b.id as board_id from tickets t join boards b on b.id = t.board_id where t.id=${ticketId}::uuid limit 1`; const ticket = rows[0]; if (!ticket) return { skipped: true }; if (["executing","done"].includes(ticket.execution_state)) return { skipped: true }; if (!['queued','ready_to_execute','picked_up','planning','awaiting_approval'].includes(ticket.execution_state)) return { skipped: true }; await handleTicket(ticket, ticket.board_id, wid); return { ok: true }; }
 async function setupWorker() { ticketWorker = new Worker("tickets", async (job) => { try { return await processJob(job); } catch (error) { console.error("[task-worker] job failed", error); throw error; } }, { connection: redisConnection, concurrency: Math.max(1, Number(process.env.TICKET_WORKER_CONCURRENCY || latestSettings.maxConcurrency || 3)), stalledInterval: 30000 }); ticketWorker.on("stalled", (jobId) => console.warn("[task-worker] stalled job", jobId)); ticketWorker.on("completed", (job) => console.log(`[task-worker] completed ${job.id}`)); ticketWorker.on("failed", (job, err) => console.error(`[task-worker] failed ${job?.id}`, err?.message || err)); }
 async function setupNotifyBridge() { await sql.listen('ticket_ready', async (payload) => { if (shuttingDown) return; const ticketId = String(payload || '').trim(); if (ticketId) await enqueueTicket(ticketId, { source: 'notify' }); }); notifyListenerActive = true; }
 async function handleTick() { try { const settings = await getSettings(); const out = { picked: 0, reason: "bullmq" }; await sql`update worker_settings set last_tick_at=now(), updated_at=now() where id=1`; await sql`select pg_notify('worker_tick', ${JSON.stringify({ picked: out.picked, reason: out.reason, interval: settings.pollIntervalSeconds, concurrency: settings.maxConcurrency, at: new Date().toISOString() })})`; } catch (error) { console.error("[task-worker] tick failed", error); } }
-async function main() { await getOpenclawConfig(); await setupWorker(); await setupNotifyBridge(); await handleTick(); promoteTimer = setInterval(async () => { void promoteAutoApprove(await workspaceId(), myQueue); }, 60000); settingsTimer = setInterval(() => { void getSettings(); }, 30000); console.log("[task-worker] started (bullmq)"); await new Promise(() => {}); }
-async function shutdown() { if (shuttingDown) return; shuttingDown = true; if (promoteTimer) clearInterval(promoteTimer); if (settingsTimer) clearInterval(settingsTimer); if (ticketWorker) await ticketWorker.close(); await sql.end({ timeout: 5 }); process.exit(0); }
+async function twWriteHeartbeat(status = "running", lastError = null) {
+  try {
+    await sql`
+      INSERT INTO service_health (name, status, pid, last_heartbeat_at, last_error, started_at, updated_at)
+      VALUES (${TW_SERVICE_NAME}, ${status}, ${process.pid}, now(), ${lastError}, now(), now())
+      ON CONFLICT (name) DO UPDATE SET
+        status = ${status},
+        pid = ${process.pid},
+        last_heartbeat_at = now(),
+        last_error = COALESCE(${lastError}, service_health.last_error),
+        updated_at = now()
+    `;
+  } catch (err) {
+    console.warn("[task-worker] Heartbeat write failed:", err.message);
+  }
+}
+let heartbeatTimer = null;
+async function main() { await getOpenclawConfig(); await setupWorker(); await setupNotifyBridge(); await handleTick(); promoteTimer = setInterval(async () => { void promoteAutoApprove(await workspaceId(), myQueue); }, 60000); settingsTimer = setInterval(() => { void getSettings(); }, 30000); await twWriteHeartbeat("running"); heartbeatTimer = setInterval(() => twWriteHeartbeat("running"), 30000); console.log("[task-worker] started (bullmq)"); await new Promise(() => {}); }
+async function shutdown() { if (shuttingDown) return; shuttingDown = true; if (promoteTimer) clearInterval(promoteTimer); if (settingsTimer) clearInterval(settingsTimer); if (heartbeatTimer) clearInterval(heartbeatTimer); await twWriteHeartbeat("stopped").catch(() => {}); if (ticketWorker) await ticketWorker.close(); await sql.end({ timeout: 5 }); process.exit(0); }
 process.on("SIGINT", shutdown); process.on("SIGTERM", shutdown); await main();

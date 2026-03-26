@@ -59,6 +59,12 @@ if [ "$(printf '%s\n' "20.10.0" "$DOCKER_VERSION" | sort -V | head -n1)" != "20.
 fi
 info "Docker $DOCKER_VERSION — OK"
 
+# Check for Redis (required for BullMQ)
+if ! command -v redis-server >/dev/null 2>&1 && ! command -v redis-cli >/dev/null 2>&1; then
+  warn "Redis not found. BullMQ requires Redis."
+  warn "Install: sudo apt install redis-server"
+fi
+
 step "Checking SSH access to GitHub ..."
 if ssh -T git@github.com 2>/dev/null | grep -q "successfully"; then
   info "SSH access to GitHub — OK"

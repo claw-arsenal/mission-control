@@ -28,13 +28,15 @@ export type AgendaEvent = {
   updated_at: string;
   processes: AgendaEventProcess[];
   latest_occurrence_status?: string | null;
+  run_started_at?: string | null;
+  run_finished_at?: string | null;
 };
 
 export type AgendaOccurrence = {
   id: string;
   agenda_event_id: string;
   scheduled_for: string;
-  status: "scheduled" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  status: "scheduled" | "queued" | "running" | "succeeded" | "failed" | "cancelled" | "needs_retry" | "expired";
   latest_attempt_no: number;
   locked_at: string | null;
   created_at: string;
@@ -67,6 +69,8 @@ export type AgendaEventFormData = {
   recurrence: "none" | "daily" | "weekly" | "monthly";
   weekdays: string[];
   recurrenceUntil: string;
+  executionWindowMinutes?: number;
+  fallbackModel?: string;
 };
 
 async function apiFetch(path: string, body: Record<string, unknown>) {
@@ -111,6 +115,8 @@ function toCalendarEvents(events: AgendaEvent[]): EventInput[] {
       status: e.status,
       processes: e.processes ?? [],
       latestResult: e.latest_occurrence_status ?? null,
+      runStartedAt: e.run_started_at ?? null,
+      runFinishedAt: e.run_finished_at ?? null,
       nextRuns: [],
     },
   }));
@@ -165,6 +171,8 @@ export function useAgenda() {
       recurrenceUntil,
       status: form.status,
       processVersionIds: form.processVersionIds,
+      executionWindowMinutes: form.executionWindowMinutes ?? 30,
+      fallbackModel: form.fallbackModel ?? "",
     });
 
     if (json.ok) {
@@ -199,6 +207,8 @@ export function useAgenda() {
     }
     if (form.status !== undefined) patch.status = form.status;
     if (form.processVersionIds !== undefined) patch.processVersionIds = form.processVersionIds;
+    if (form.executionWindowMinutes !== undefined) patch.executionWindowMinutes = form.executionWindowMinutes;
+    if (form.fallbackModel !== undefined) patch.fallbackModel = form.fallbackModel;
 
     const res = await fetch(`/api/agenda/events/${id}`, {
       method: "PATCH",

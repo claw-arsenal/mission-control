@@ -5,6 +5,8 @@
  * 2. Expands RRULE / one-time events over a lookahead window
  * 3. Creates missing agenda_occurrences
  * 4. Enqueues due occurrences to BullMQ
+ * v2: Passes scheduledFor, executionWindowMinutes, fallbackModel in job data.
+ *     Service heartbeat to service_health table.
  */
 import postgres from "postgres";
 import { Queue } from "bullmq";
@@ -22,6 +24,7 @@ if (!connectionString) {
 const REDIS_HOST = process.env.REDIS_HOST || process.env.REDIS_URL?.replace(/^redis:\/\//, "").split(":")[0] || "localhost";
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || "6379", 10);
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
+const SERVICE_NAME = "agenda-scheduler";
 
 const sql = postgres(connectionString, { max: 5, prepare: false, idle_timeout: 20, connect_timeout: 10 });
 
@@ -29,6 +32,24 @@ const agendaQueue = new Queue("agenda", {
   connection: { host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD },
   defaultJobOptions: { removeOnComplete: 100, removeOnFail: 200, attempts: 1 },
 });
+
+// ── Service heartbeat ─────────────────────────────────────────────────────────
+async function writeHeartbeat(status = "running", lastError = null) {
+  try {
+    await sql`
+      INSERT INTO service_health (name, status, pid, last_heartbeat_at, last_error, started_at, updated_at)
+      VALUES (${SERVICE_NAME}, ${status}, ${process.pid}, now(), ${lastError}, now(), now())
+      ON CONFLICT (name) DO UPDATE SET
+        status = ${status},
+        pid = ${process.pid},
+        last_heartbeat_at = now(),
+        last_error = COALESCE(${lastError}, service_health.last_error),
+        updated_at = now()
+    `;
+  } catch (err) {
+    console.warn("[agenda-scheduler] Heartbeat write failed:", err.message);
+  }
+}
 
 let redisUp = false;
 async function checkRedis() {
@@ -87,6 +108,8 @@ async function run() {
       ae.recurrence_until,
       ae.timezone,
       ae.status,
+      ae.execution_window_minutes,
+      ae.fallback_model,
       coalesce(
         (select json_agg(json_build_object(
           'process_version_id', aep.process_version_id,
@@ -119,29 +142,37 @@ async function run() {
       `;
 
       if (occ && occ.status === "scheduled") {
-        // Enqueue if within 1 minute of now
+        // Only enqueue jobs that are due within the next 2 minutes (scheduler runs every 60s)
         const diffMs = scheduledFor.getTime() - now.getTime();
-        const delay = Math.max(0, diffMs);
+        const TWO_MINUTES = 2 * 60 * 1000;
 
-        await agendaQueue.add(
-          "run-occurrence",
-          {
-            occurrenceId: occ.id,
-            eventId: event.id,
-            title: event.title,
-            freePrompt: event.free_prompt,
-            agentId: event.default_agent_id,
-            timezone: event.timezone,
-            processes: event.processes,
-          },
-          {
-            delay,
-            jobId: `agenda-${occ.id}`,
-            removeOnComplete: false, // keep history
-          }
-        );
+        if (diffMs <= TWO_MINUTES) {
+          const delay = Math.max(0, diffMs);
 
-        enqueued++;
+          await agendaQueue.add(
+            "run-occurrence",
+            {
+              occurrenceId: occ.id,
+              eventId: event.id,
+              title: event.title,
+              freePrompt: event.free_prompt,
+              agentId: event.default_agent_id,
+              timezone: event.timezone,
+              processes: event.processes,
+              scheduledFor: scheduledFor.toISOString(),
+              executionWindowMinutes: event.execution_window_minutes || 30,
+              fallbackModel: event.fallback_model || "",
+            },
+            {
+              delay,
+              jobId: `agenda-${occ.id}`,
+              removeOnComplete: false,
+            }
+          );
+
+          enqueued++;
+        }
+        // Future occurrences stay as 'scheduled' in DB — will be enqueued when their time comes
       }
     }
   }
@@ -149,12 +180,18 @@ async function run() {
   console.log(`[agenda-scheduler] ${new Date().toISOString()} — scanned ${rows.length} events, enqueued ${enqueued} occurrences`);
 }
 
+// ── Service heartbeat on startup + every 30s ──────────────────────────────────
+await writeHeartbeat("running");
+const heartbeatInterval = setInterval(() => writeHeartbeat("running"), 30_000);
+
 let shuttingDown = false;
 
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log("[agenda-scheduler] Shutting down...");
+  clearInterval(heartbeatInterval);
+  await writeHeartbeat("stopped").catch(() => {});
   await agendaQueue.close();
   await sql.end();
   process.exit(0);

@@ -24,7 +24,9 @@ export type TicketExecutionState =
   | "queued"
   | "picked_up"
   | "running"
-  | "draft";
+  | "draft"
+  | "needs_retry"
+  | "expired";
 
 export type TicketExecutionMode = "direct" | "planned";
 
@@ -56,6 +58,8 @@ export type Ticket = {
   endDateMode?: string;
   endDate?: string | null;
   modelOverride?: string;
+  executionWindowMinutes?: number;
+  fallbackModel?: string;
   checklistDone: number;
   checklistTotal: number;
   comments: number;
@@ -149,6 +153,8 @@ export type CreateTicketForm = {
   assignedAgentId: string;
   executionMode: TicketExecutionMode;
   processVersionIds: string[];
+  executionWindowMinutes: number;
+  fallbackModel: string;
 };
 
 export type TicketDetailsForm = {
@@ -168,6 +174,8 @@ export type TicketDetailsForm = {
   planApproved: boolean;
   executionState: TicketExecutionState;
   processVersionIds: string[];
+  executionWindowMinutes: number;
+  fallbackModel: string;
   checklistDone: number;
   checklistTotal: number;
   comments: number;
@@ -322,6 +330,8 @@ export const emptyCreateForm = (statusId: string): CreateTicketForm => ({
   assignedAgentId: "",
   executionMode: "direct",
   processVersionIds: [],
+  executionWindowMinutes: 60,
+  fallbackModel: "",
 });
 
 const MONTH_SHORT = [

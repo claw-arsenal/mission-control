@@ -34,7 +34,9 @@ import {
   IconCheck,
   IconStack2,
   IconCpu,
+  IconShieldCheck,
 } from "@tabler/icons-react";
+import { toast } from "sonner";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +67,8 @@ export type AgendaEventFormData = {
   startDateMode: StartDateMode;
   endDateMode: EndDateMode;
   frequency: Frequency;
+  executionWindowMinutes: number;
+  fallbackModel: string;
 };
 
 type AgentOption = { id: string; name: string };
@@ -104,6 +108,36 @@ const MODELS = [
   { id: "openrouter/deepseek/deepseek-chat-v3:free", alias: "Deepseek Chat V3 Free" },
 ];
 
+// ── Provider label from model id ─────────────────────────────────────────────
+
+function getProviderLabel(modelId: string): string {
+  if (modelId.startsWith('anthropic/')) return 'Anthropic';
+  if (modelId.startsWith('openrouter/openai/')) return 'OpenAI';
+  if (modelId.startsWith('openrouter/google/')) return 'Google';
+  if (modelId.startsWith('openrouter/deepseek/')) return 'DeepSeek';
+  if (modelId.startsWith('openrouter/minimax/')) return 'MiniMax';
+  if (modelId.startsWith('openrouter/mistralai/')) return 'Mistral';
+  if (modelId.startsWith('openrouter/qwen/')) return 'Qwen';
+  if (modelId.startsWith('openrouter/stepfun/')) return 'StepFun';
+  if (modelId === 'openrouter/auto') return 'OpenRouter';
+  return 'Other';
+}
+
+// ── Timezone abbreviation helper ─────────────────────────────────────────────
+
+function getTimezoneAbbr(timezone: string, date?: Date): string {
+  try {
+    const d = date || new Date();
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'short',
+    }).formatToParts(d);
+    return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    return '';
+  }
+}
+
 const TIMEZONES = [
   { value: "Europe/Amsterdam", label: "Europe/Amsterdam (CET)" },
   { value: "Europe/London", label: "Europe/London (GMT)" },
@@ -127,6 +161,39 @@ const WEEKDAYS = [
   { value: "0", label: "Sun" },
 ];
 
+function getCurrentTimeInTz(tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+    const h = parts.find((p) => p.type === "hour")?.value ?? "10";
+    const m = parts.find((p) => p.type === "minute")?.value ?? "00";
+    return `${h}:${m}`;
+  } catch {
+    return "10:00";
+  }
+}
+
+function getTodayInTz(tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const y = parts.find((p) => p.type === "year")?.value ?? "";
+    const mo = parts.find((p) => p.type === "month")?.value ?? "";
+    const d = parts.find((p) => p.type === "day")?.value ?? "";
+    return `${y}-${mo}-${d}`;
+  } catch {
+    return new Date().toISOString().split("T")[0];
+  }
+}
+
 const STEPS = [
   { key: "type", label: "Type", icon: IconCalendarEvent },
   { key: "details", label: "Details", icon: IconMicrophone },
@@ -141,9 +208,9 @@ const defaultForm: AgendaEventFormData = {
   freePrompt: "",
   agentId: "",
   processVersionIds: [],
-  status: "draft",
-  startDate: "",
-  startTime: "10:00",
+  status: "active",
+  startDate: getTodayInTz("Europe/Amsterdam"),
+  startTime: getCurrentTimeInTz("Europe/Amsterdam"),
   endDate: "",
   endTime: "",
   timezone: "Europe/Amsterdam",
@@ -155,6 +222,8 @@ const defaultForm: AgendaEventFormData = {
   startDateMode: "now",
   endDateMode: "forever",
   frequency: "daily",
+  executionWindowMinutes: 30,
+  fallbackModel: "",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -206,30 +275,36 @@ function buildInitialForm(data: Partial<AgendaEventFormData>): AgendaEventFormDa
     modelOverride: data.modelOverride ?? "",
     startDateMode,
     endDateMode,
+    executionWindowMinutes: data.executionWindowMinutes ?? 30,
+    fallbackModel: data.fallbackModel ?? "",
   };
 }
 
 // ── Step indicator (floating cards) ─────────────────────────────────────────
 
-function StepIndicator({ currentStep, onStepClick }: { currentStep: number; onStepClick: (i: number) => void }) {
+function StepIndicator({ currentStep, onStepClick, canReach }: { currentStep: number; onStepClick: (i: number) => void; canReach?: (step: number) => boolean }) {
   return (
     <div className="flex gap-1.5 w-full">
       {STEPS.map((step, i) => {
         const Icon = step.icon;
         const isActive = i === currentStep;
         const isDone = i < currentStep;
+        const isDisabled = i > currentStep && canReach && !canReach(i);
         return (
           <button
             key={step.key}
             type="button"
-            onClick={() => onStepClick(i)}
+            onClick={() => !isDisabled && onStepClick(i)}
+            disabled={isDisabled}
             className={[
-              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 cursor-pointer border",
-              isActive
-                ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                : isDone
-                  ? "bg-primary/10 text-primary border-primary/20 hover:bg-primary/15"
-                  : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted/60",
+              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 border",
+              isDisabled
+                ? "bg-muted/20 text-muted-foreground/40 border-transparent cursor-not-allowed"
+                : isActive
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm cursor-pointer"
+                  : isDone
+                    ? "bg-primary/10 text-primary border-primary/20 hover:bg-primary/15 cursor-pointer"
+                    : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted/60 cursor-pointer",
             ].join(" ")}
           >
             <div className={[
@@ -313,7 +388,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
 
   const goNext = () => {
     const err = validateStep(step);
-    if (err) { setError(err); return; }
+    if (err) { setError(err); toast.error(err); return; }
     setError("");
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
@@ -321,6 +396,13 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
   const goBack = () => {
     setError("");
     setStep((s) => Math.max(s - 1, 0));
+  };
+
+  const canReachStep = (targetStep: number): boolean => {
+    for (let s = 0; s < targetStep; s++) {
+      if (validateStep(s)) return false;
+    }
+    return true;
   };
 
   const goToStep = (i: number) => {
@@ -333,7 +415,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
     // Going forward — validate all intermediate steps
     for (let s = step; s < i; s++) {
       const err = validateStep(s);
-      if (err) { setError(err); return; }
+      if (err) { setError(err); toast.error(err); return; }
     }
     setError("");
     setStep(i);
@@ -351,7 +433,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
     const saveData: AgendaEventFormData = {
       ...form,
       recurrence: derivedRecurrence,
-      startDate: form.startDateMode === "now" && form.taskType === "repeatable" ? "" : form.startDate,
+      startDate: form.startDateMode === "now" && form.taskType === "repeatable" ? new Date().toISOString().split("T")[0] : form.startDate,
       endDate: form.endDateMode === "forever" ? "" : form.endDate,
     };
 
@@ -453,8 +535,8 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           placeholder="Give the agent a free-text instruction..."
           value={form.freePrompt}
           onChange={(e) => updateField("freePrompt", e.target.value)}
-          rows={3}
-          className="resize-none"
+          rows={5}
+          className="resize-y min-h-[100px]"
         />
       </div>
 
@@ -555,11 +637,39 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
             <SelectContent>
               <SelectItem value="__default__">Agent default</SelectItem>
               {MODELS.map((m) => (
-                <SelectItem key={m.id} value={m.id}>{m.alias}</SelectItem>
+                <SelectItem key={m.id} value={m.id}>
+                  <span className="font-medium">{m.alias}</span>
+                  <span className="text-muted-foreground text-xs ml-2">({getProviderLabel(m.id)})</span>
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      {/* Fallback Model — full width */}
+      <div className="flex flex-col gap-1.5">
+        <Label className="text-xs font-semibold text-foreground/80 flex items-center gap-1.5">
+          <IconShieldCheck className="size-3.5 text-primary" />
+          Fallback Model
+        </Label>
+        <Select
+          value={form.fallbackModel || "__none__"}
+          onValueChange={(v) => updateField("fallbackModel", v === "__none__" ? "" : v)}
+        >
+          <SelectTrigger className="h-10 w-full cursor-pointer">
+            <SelectValue placeholder="None" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {MODELS.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                <span className="font-medium">{m.alias}</span>
+                <span className="text-muted-foreground text-xs ml-2">({getProviderLabel(m.id)})</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Status — full width */}
@@ -741,7 +851,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
         <Label htmlFor="ae-tz" className="text-xs font-semibold text-foreground/80">
           Timezone
         </Label>
-        <Select value={form.timezone} onValueChange={(v) => updateField("timezone", v)}>
+        <Select value={form.timezone} onValueChange={(v) => { updateField("timezone", v); updateField("startDate", getTodayInTz(v)); updateField("startTime", getCurrentTimeInTz(v)); }}>
           <SelectTrigger id="ae-tz" className="h-10 w-full cursor-pointer">
             <SelectValue />
           </SelectTrigger>
@@ -783,7 +893,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           {form.taskType === "one_time" ? (
             <>
               <ReviewRow label="Date" value={form.startDate || "—"} />
-              <ReviewRow label="Time" value={form.startTime || "—"} />
+              <ReviewRow label="Time" value={form.startTime ? `${form.startTime} ${getTimezoneAbbr(form.timezone)}` : "—"} />
             </>
           ) : (
             <>
@@ -791,13 +901,15 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
               {form.frequency === "weekly" && weekdayLabels && (
                 <ReviewRow label="Days" value={weekdayLabels} />
               )}
-              <ReviewRow label="Time" value={form.startTime || "—"} />
+              <ReviewRow label="Time" value={form.startTime ? `${form.startTime} ${getTimezoneAbbr(form.timezone)}` : "—"} />
               <ReviewRow label="Starts" value={form.startDateMode === "now" ? "Immediately" : (form.startDate || "—")} />
               <ReviewRow label="Ends" value={form.endDateMode === "forever" ? "Runs forever" : (form.endDate || "—")} />
             </>
           )}
 
           <ReviewRow label="Timezone" value={form.timezone} />
+          {/* executionWindowMinutes uses global default from settings */}
+          {form.fallbackModel && <ReviewRow label="Fallback" value={MODELS.find((m) => m.id === form.fallbackModel)?.alias || form.fallbackModel} />}
         </div>
       </div>
     );
@@ -835,7 +947,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
 
         {/* Step indicator */}
         <div className="px-6 pt-3">
-          <StepIndicator currentStep={step} onStepClick={goToStep} />
+          <StepIndicator currentStep={step} onStepClick={goToStep} canReach={canReachStep} />
         </div>
 
         {/* Step content */}

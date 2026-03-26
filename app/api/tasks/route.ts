@@ -63,17 +63,19 @@ async function logTaskAudit(
 
 async function getWorkerSettings(sql: ReturnType<typeof getSql>) {
   const rows = await sql`
-    select enabled, poll_interval_seconds, max_concurrency, last_tick_at
+    select enabled, poll_interval_seconds, max_concurrency, last_tick_at, agenda_concurrency, default_execution_window_minutes
     from worker_settings
     where id = 1
     limit 1
   `;
-  const row = rows[0] || { enabled: true, poll_interval_seconds: 20, max_concurrency: 3, last_tick_at: null };
+  const row = rows[0] || { enabled: true, poll_interval_seconds: 20, max_concurrency: 3, last_tick_at: null, agenda_concurrency: 5, default_execution_window_minutes: 30 };
   return {
     enabled: Boolean(row.enabled),
     pollIntervalSeconds: Number(row.poll_interval_seconds || 20),
     maxConcurrency: Number(row.max_concurrency || 3),
     lastTickAt: row.last_tick_at ? String(row.last_tick_at) : null,
+    agendaConcurrency: Number(row.agenda_concurrency || 5),
+    defaultExecutionWindowMinutes: Number(row.default_execution_window_minutes || 30),
   };
 }
 
@@ -217,11 +219,13 @@ export async function POST(request: Request) {
         insert into tickets (
           workspace_id, board_id, column_id, title, description, priority, due_date,
           tags, assignee_ids, assigned_agent_id, execution_mode, plan_text, plan_approved, scheduled_for, execution_state,
-          checklist_done, checklist_total, comments_count, attachments_count, position, telegram_chat_id, process_version_ids
+          checklist_done, checklist_total, comments_count, attachments_count, position, telegram_chat_id, process_version_ids,
+          execution_window_minutes, fallback_model
         ) values (
           ${wid}, ${boardId}, ${columnId}, ${title}, ${String(body.description || "")}, ${String(body.priority || "low")}, ${body.dueDate || null},
           ${sql.array(tags)}, ${sql.array(assigneeIds)}, ${String(body.assignedAgentId || "")}, ${String(body.executionMode || "direct")}, ${String(body.planText || "")}, ${Boolean(body.planApproved)}, ${body.scheduledFor || null}, ${String(body.executionState || "open")},
-          ${Number(body.checklistDone || 0)}, ${Number(body.checklistTotal || 0)}, ${Number(body.commentsCount || 0)}, ${Number(body.attachmentsCount || 0)}, ${position}, ${body.telegramChatId || null}, ${sql.array(processVersionIds)}::uuid[]
+          ${Number(body.checklistDone || 0)}, ${Number(body.checklistTotal || 0)}, ${Number(body.commentsCount || 0)}, ${Number(body.attachmentsCount || 0)}, ${position}, ${body.telegramChatId || null}, ${sql.array(processVersionIds)}::uuid[],
+          ${Number(body.executionWindowMinutes || 60)}, ${String(body.fallbackModel || "")}
         )
         returning *
       `;
@@ -245,6 +249,17 @@ export async function POST(request: Request) {
 
       const beforeRows = await sql`select * from tickets where id=${ticketId} limit 1`;
       const before = beforeRows[0];
+
+      // Ticket locking during execution
+      if (before && ['executing', 'running'].includes(before.execution_state)) {
+        const allowedFields = ['execution_state', 'plan_text'];
+        const editFields = Object.keys(body).filter(k => k !== 'action' && k !== 'ticketId' && body[k] !== undefined);
+        const hasUserEdits = editFields.some(f => !allowedFields.includes(f));
+        if (hasUserEdits) {
+          return fail("Cannot edit ticket while it is executing. Wait for completion or cancel first.");
+        }
+      }
+
       const rows = await sql`
         update tickets
         set
@@ -268,6 +283,8 @@ export async function POST(request: Request) {
           checklist_total = coalesce(${body.checklistTotal ?? null}, checklist_total),
           comments_count = coalesce(${body.commentsCount ?? null}, comments_count),
           attachments_count = coalesce(${body.attachmentsCount ?? null}, attachments_count),
+          execution_window_minutes = coalesce(${body.executionWindowMinutes ?? null}, execution_window_minutes),
+          fallback_model = case when ${body.fallbackModel === undefined} then fallback_model else ${body.fallbackModel ?? ''} end,
           updated_at = now()
         where id = ${ticketId}
         returning *
@@ -613,6 +630,8 @@ export async function POST(request: Request) {
       const enabled = body.enabled === undefined ? null : Boolean(body.enabled);
       const pollIntervalSeconds = body.pollIntervalSeconds === undefined ? null : Number(body.pollIntervalSeconds);
       const maxConcurrency = body.maxConcurrency === undefined ? null : Number(body.maxConcurrency);
+      const agendaConcurrency = body.agendaConcurrency === undefined ? null : Number(body.agendaConcurrency);
+      const defaultExecutionWindowMinutes = body.defaultExecutionWindowMinutes === undefined ? null : Number(body.defaultExecutionWindowMinutes);
 
       if (pollIntervalSeconds !== null && (!Number.isFinite(pollIntervalSeconds) || pollIntervalSeconds < 5 || pollIntervalSeconds > 300)) {
         return fail("pollIntervalSeconds must be between 5 and 300");
@@ -620,14 +639,22 @@ export async function POST(request: Request) {
       if (maxConcurrency !== null && (!Number.isFinite(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 20)) {
         return fail("maxConcurrency must be between 1 and 20");
       }
+      if (agendaConcurrency !== null && (!Number.isFinite(agendaConcurrency) || agendaConcurrency < 1 || agendaConcurrency > 10)) {
+        return fail("agendaConcurrency must be between 1 and 10");
+      }
+      if (defaultExecutionWindowMinutes !== null && (!Number.isFinite(defaultExecutionWindowMinutes) || defaultExecutionWindowMinutes < 1 || defaultExecutionWindowMinutes > 1440)) {
+        return fail("defaultExecutionWindowMinutes must be between 1 and 1440");
+      }
 
       await sql`
-        insert into worker_settings (id, enabled, poll_interval_seconds, max_concurrency)
-        values (1, coalesce(${enabled}, true), coalesce(${pollIntervalSeconds}, 20), coalesce(${maxConcurrency}, 3))
+        insert into worker_settings (id, enabled, poll_interval_seconds, max_concurrency, agenda_concurrency, default_execution_window_minutes)
+        values (1, coalesce(${enabled}, true), coalesce(${pollIntervalSeconds}, 20), coalesce(${maxConcurrency}, 3), coalesce(${agendaConcurrency}, 5), coalesce(${defaultExecutionWindowMinutes}, 30))
         on conflict (id) do update
           set enabled = coalesce(${enabled}, worker_settings.enabled),
               poll_interval_seconds = coalesce(${pollIntervalSeconds}, worker_settings.poll_interval_seconds),
               max_concurrency = coalesce(${maxConcurrency}, worker_settings.max_concurrency),
+              agenda_concurrency = coalesce(${agendaConcurrency}, worker_settings.agenda_concurrency),
+              default_execution_window_minutes = coalesce(${defaultExecutionWindowMinutes}, worker_settings.default_execution_window_minutes),
               updated_at = now()
       `;
 
@@ -683,6 +710,38 @@ export async function POST(request: Request) {
 
       const updated = await sql`select * from tickets where id=${ticketId} limit 1`;
       return ok({ ticket: updated[0] });
+    }
+
+    if (action === "retryFromNeedsRetry") {
+      const ticketId = String(body.ticketId || "");
+      if (!ticketId) return fail("Ticket id is required.");
+      const rows = await sql`SELECT * FROM tickets WHERE id=${ticketId} LIMIT 1`;
+      const ticket = rows[0];
+      if (!ticket) return fail("Ticket not found.", 404);
+      if (!['needs_retry', 'expired', 'failed'].includes(ticket.execution_state)) {
+        return fail("Ticket is not in a retryable state.");
+      }
+      if (!ticket.assigned_agent_id) return fail("No agent assigned.");
+      await sql`UPDATE tickets SET execution_state='queued', updated_at=now() WHERE id=${ticketId}`;
+      await sql`SELECT pg_notify('ticket_ready', ${ticketId}::text)`;
+      await logTaskAudit(sql, wid, { event: 'Manual retry', details: `Re-queued from ${ticket.execution_state}`, level: 'warning', ticketId });
+      const updated = await sql`SELECT * FROM tickets WHERE id=${ticketId} LIMIT 1`;
+      return ok({ ticket: updated[0] });
+    }
+
+    if (action === "listFailedTickets") {
+      const rows = await sql`
+        SELECT t.*, b.name as board_name,
+          (SELECT ta.details FROM ticket_activity ta
+           WHERE ta.ticket_id = t.id AND ta.event = 'Failed'
+           ORDER BY ta.occurred_at DESC LIMIT 1) as last_error
+        FROM tickets t
+        JOIN boards b ON b.id = t.board_id
+        WHERE t.workspace_id = ${wid}
+          AND t.execution_state IN ('failed', 'needs_retry', 'expired')
+        ORDER BY t.updated_at DESC
+      `;
+      return ok({ tickets: rows });
     }
 
     return fail(`Unsupported action: ${action}`);

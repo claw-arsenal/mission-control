@@ -244,6 +244,8 @@ values (1, true, 20, 3)
 on conflict (id) do nothing;
 
 alter table worker_settings add column if not exists last_tick_at timestamptz;
+alter table worker_settings add column if not exists agenda_concurrency integer not null default 5;
+alter table worker_settings add column if not exists default_execution_window_minutes integer not null default 30;
 
 -- ─── Phase 2: Processes ──────────────────────────────────────────────────────
 
@@ -396,3 +398,38 @@ alter table agenda_events add column if not exists model_override text not null 
 -- Process version label + step model override
 alter table process_versions add column if not exists version_label text not null default '';
 alter table process_steps add column if not exists model_override text not null default '';
+
+-- ─── Phase 3: Resilient Job Orchestration ─────────────────────────────────────
+
+-- Expand occurrence statuses to include needs_retry and expired
+ALTER TABLE agenda_occurrences DROP CONSTRAINT IF EXISTS agenda_occurrences_status_check;
+ALTER TABLE agenda_occurrences ADD CONSTRAINT agenda_occurrences_status_check
+  CHECK (status IN ('scheduled', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'needs_retry', 'expired'));
+
+-- Execution window + fallback model on events
+ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS execution_window_minutes integer NOT NULL DEFAULT 30;
+ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS fallback_model text NOT NULL DEFAULT '';
+
+-- Fallback model on process steps
+ALTER TABLE process_steps ADD COLUMN IF NOT EXISTS fallback_model text NOT NULL DEFAULT '';
+
+-- Service health monitoring
+CREATE TABLE IF NOT EXISTS service_health (
+  name text PRIMARY KEY,
+  status text NOT NULL DEFAULT 'unknown' CHECK (status IN ('running', 'stopped', 'error', 'unknown')),
+  pid integer,
+  last_heartbeat_at timestamptz,
+  last_error text,
+  started_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ─── Phase 3b: Ticket Resilience v1.3 ─────────────────────────────────────────
+
+-- Execution window + fallback model on tickets
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS execution_window_minutes integer NOT NULL DEFAULT 60;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fallback_model text NOT NULL DEFAULT '';
+
+-- Note: execution_state is an unconstrained text column. The following are now valid:
+-- needs_retry — manual intervention required after max retries exhausted
+-- expired — missed the execution window

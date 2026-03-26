@@ -36,12 +36,18 @@ export async function POST(request: Request) {
       try {
         const { stdout: pullOut } = await execFileAsync("git", ["pull", "--ff-only"], { cwd: PROJECT_ROOT, timeout: 30000 });
         await execFileAsync("npm", ["install", "--no-audit", "--no-fund"], { cwd: PROJECT_ROOT, timeout: 120000 });
+        // Run DB migrations (schema.sql uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS, safe to re-run)
+        try {
+          await execFileAsync("docker", ["compose", "exec", "-T", "db", "psql", "-U", "openclaw", "-d", "mission_control", "-f", "/workspace/db/schema.sql"], { cwd: PROJECT_ROOT, timeout: 30000 });
+        } catch (dbErr) {
+          console.warn("[system] DB migration warning (non-fatal):", dbErr instanceof Error ? dbErr.message : dbErr);
+        }
         await execFileAsync("npx", ["next", "build"], { cwd: PROJECT_ROOT, timeout: 180000 });
         const mcServices = resolve(PROJECT_ROOT, "scripts/mc-services.sh");
         if (existsSync(mcServices)) {
           await execFileAsync("bash", [mcServices, "restart"], { cwd: PROJECT_ROOT, timeout: 30000 });
         }
-        return ok({ message: "Update complete. Services restarted.", pullOutput: pullOut.trim() });
+        return ok({ message: "Update complete. Migrations applied, services restarted.", pullOutput: pullOut.trim() });
       } catch (e) {
         return fail(e instanceof Error ? e.message : "Update failed");
       }

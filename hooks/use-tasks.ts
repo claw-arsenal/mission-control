@@ -178,6 +178,8 @@ function hydrateBoards(
         scheduledFor: t.scheduled_for ? t.scheduled_for.slice(0, 10) : null,
         executionState: (t.execution_state as Ticket["executionState"]) ?? "open",
         processVersionIds: t.process_version_ids ?? [],
+        executionWindowMinutes: t.execution_window_minutes ?? 60,
+        fallbackModel: t.fallback_model ?? "",
         checklistDone: t.checklist_done ?? 0,
         checklistTotal: t.checklist_total ?? 0,
         comments: t.comments_count ?? 0,
@@ -234,6 +236,8 @@ const toTicket = (row: TicketRecord): Ticket => ({
   scheduledFor: formatDueDateInput(row.scheduledFor),
   executionState: row.executionState,
   processVersionIds: row.processVersionIds ?? [],
+  executionWindowMinutes: row.executionWindowMinutes ?? 60,
+  fallbackModel: row.fallbackModel ?? "",
   checklistDone: row.checklistDone,
   checklistTotal: row.checklistTotal,
   comments: row.commentsCount,
@@ -534,7 +538,9 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       createForm.assigneeIds.join(",") !== createSnapshot.assigneeIds.join(",") ||
       createForm.assignedAgentId !== createSnapshot.assignedAgentId ||
       createForm.executionMode !== createSnapshot.executionMode ||
-      (createForm.processVersionIds?.join(",") ?? "") !== (createSnapshot.processVersionIds?.join(",") ?? ""),
+      (createForm.processVersionIds?.join(",") ?? "") !== (createSnapshot.processVersionIds?.join(",") ?? "") ||
+      createForm.executionWindowMinutes !== createSnapshot.executionWindowMinutes ||
+      createForm.fallbackModel !== createSnapshot.fallbackModel,
     [createForm, createSnapshot],
   );
 
@@ -553,7 +559,9 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       detailsForm.executionMode !== detailsSnapshot.executionMode ||
       detailsForm.planText !== detailsSnapshot.planText ||
       detailsForm.planApproved !== detailsSnapshot.planApproved ||
-      detailsForm.executionState !== detailsSnapshot.executionState
+      detailsForm.executionState !== detailsSnapshot.executionState ||
+      detailsForm.executionWindowMinutes !== detailsSnapshot.executionWindowMinutes ||
+      detailsForm.fallbackModel !== detailsSnapshot.fallbackModel
     );
   }, [detailsForm, detailsSnapshot]);
 
@@ -627,6 +635,8 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       planApproved: Boolean(ticket.planApproved),
       executionState: ticket.executionState ?? "open",
       processVersionIds: ticket.processVersionIds ?? [],
+      executionWindowMinutes: ticket.executionWindowMinutes ?? 60,
+      fallbackModel: ticket.fallbackModel ?? "",
       checklistDone: ticket.checklistDone,
       checklistTotal: ticket.checklistTotal,
       comments: ticket.comments,
@@ -1974,6 +1984,8 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
         executionMode: detailsForm.executionMode,
         planText: detailsForm.planText,
         planApproved: detailsForm.planApproved,
+        executionWindowMinutes: detailsForm.executionWindowMinutes,
+        fallbackModel: detailsForm.fallbackModel,
         executionState: detailsForm.executionMode === "planned"
           ? detailsForm.planApproved
             ? "ready_to_execute"
@@ -2111,6 +2123,13 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
       const normalized = column.title.trim().toLowerCase();
       return normalized === "in progress" || normalized === "doing";
     })?.id;
+
+    // For needs_retry/expired, use the dedicated retryFromNeedsRetry endpoint
+    if (action === "retry" && ['needs_retry', 'expired'].includes(detailsForm.executionState)) {
+      await retryFromNeedsRetry(detailsForm.id);
+      setDetailsForm((prev) => prev ? { ...prev, executionState: "queued" } : prev);
+      return;
+    }
 
     const nextExecutionState: TicketDetailsForm["executionState"] =
       action === "retry" ? "ready_to_execute" : "failed";
@@ -2295,6 +2314,48 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
     setSearchQuery("");
   };
 
+  const retryFromNeedsRetry = async (ticketId: string) => {
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "retryFromNeedsRetry", ticketId }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        toast.error(json.error || "Failed to retry ticket.");
+        return;
+      }
+      updateActiveBoard((prev) => {
+        const ticket = prev.tickets[ticketId];
+        if (!ticket) return prev;
+        return {
+          ...prev,
+          tickets: { ...prev.tickets, [ticketId]: { ...ticket, executionState: "queued" } },
+        };
+      });
+      toast.success("Ticket re-queued for execution.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to retry ticket.";
+      toast.error(message);
+    }
+  };
+
+  const listFailedTickets = async () => {
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "listFailedTickets" }),
+      });
+      const json = await res.json();
+      if (!json.ok) return [];
+      return json.tickets ?? [];
+    } catch {
+      return [];
+    }
+  };
+
   const reloadBoards = async () => {
     try {
       const res = await fetch("/api/tasks", { cache: "reload" });
@@ -2409,6 +2470,8 @@ export function useTasks({ initialBoardId, initialBoards, initialAssignees }: Us
     executeDetailsControlAction,
     moveColumn,
     moveTicket,
+    retryFromNeedsRetry,
+    listFailedTickets,
     reloadBoards,
   };
 }

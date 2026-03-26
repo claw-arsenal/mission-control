@@ -172,41 +172,85 @@ status_service() {
   fi
 }
 
+# ── Helpers: validate service name ─────────────────────────
+is_valid_service() {
+  local target=$1
+  for svc in $SERVICES; do
+    if [ "$svc" = "$target" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # ── Commands ───────────────────────────────────────────────
 CMD="${1:-status}"
+TARGET_SERVICE="${2:-}"
+
+# If a second arg is given and it's not a flag, validate it as a service name
+if [ -n "$TARGET_SERVICE" ] && [ "${TARGET_SERVICE:0:1}" != "-" ]; then
+  if ! is_valid_service "$TARGET_SERVICE"; then
+    echo "Unknown service: $TARGET_SERVICE"
+    echo "Available services: $SERVICES"
+    exit 1
+  fi
+fi
 
 case "$CMD" in
   start)
-    echo "[mc-services] Starting services..."
-    for svc in $SERVICES; do
-      if [ "${2:-}" = "--dev" ] && [ "$svc" = "nextjs" ]; then
-        echo "  $svc — skipped (--dev mode)"
-        continue
-      fi
-      start_service "$svc"
-    done
-    echo "[mc-services] All services started."
+    if [ -n "$TARGET_SERVICE" ] && [ "${TARGET_SERVICE:0:1}" != "-" ]; then
+      echo "[mc-services] Starting $TARGET_SERVICE..."
+      start_service "$TARGET_SERVICE"
+    else
+      echo "[mc-services] Starting services..."
+      for svc in $SERVICES; do
+        if [ "${2:-}" = "--dev" ] && [ "$svc" = "nextjs" ]; then
+          echo "  $svc — skipped (--dev mode)"
+          continue
+        fi
+        start_service "$svc"
+      done
+      echo "[mc-services] All services started."
+    fi
     ;;
   stop)
-    echo "[mc-services] Stopping services..."
-    for svc in $SERVICES; do
-      stop_service "$svc"
-    done
-    echo "[mc-services] All services stopped."
+    if [ -n "$TARGET_SERVICE" ] && [ "${TARGET_SERVICE:0:1}" != "-" ]; then
+      echo "[mc-services] Stopping $TARGET_SERVICE..."
+      stop_service "$TARGET_SERVICE"
+    else
+      echo "[mc-services] Stopping services..."
+      for svc in $SERVICES; do
+        stop_service "$svc"
+      done
+      echo "[mc-services] All services stopped."
+    fi
     ;;
   restart)
-    "$0" stop
-    sleep 1
-    "$0" start
+    if [ -n "$TARGET_SERVICE" ] && [ "${TARGET_SERVICE:0:1}" != "-" ]; then
+      echo "[mc-services] Restarting $TARGET_SERVICE..."
+      stop_service "$TARGET_SERVICE"
+      sleep 1
+      start_service "$TARGET_SERVICE"
+    else
+      "$0" stop
+      sleep 1
+      "$0" start
+    fi
     ;;
   status)
-    echo "[mc-services] Service status:"
-    for svc in $SERVICES; do
-      status_service "$svc"
-    done
+    if [ -n "$TARGET_SERVICE" ] && [ "${TARGET_SERVICE:0:1}" != "-" ]; then
+      echo "[mc-services] Service status:"
+      status_service "$TARGET_SERVICE"
+    else
+      echo "[mc-services] Service status:"
+      for svc in $SERVICES; do
+        status_service "$svc"
+      done
+    fi
     ;;
   *)
-    echo "Usage: mc-services {start|stop|restart|status}"
+    echo "Usage: mc-services {start|stop|restart|status} [service-name]"
+    echo "Services: $SERVICES"
     exit 1
     ;;
 esac
