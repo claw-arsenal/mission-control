@@ -1,4 +1,4 @@
-# OpenClaw Mission Control v1.4.0
+# OpenClaw Mission Control v1.5.0
 
 Local-first dashboard for OpenClaw — boards, agent scheduling, real-time logs, and execution management.
 
