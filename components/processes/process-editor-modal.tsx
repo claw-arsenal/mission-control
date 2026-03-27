@@ -536,21 +536,27 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
         <ReviewRow label="Steps" value={`${form.steps.length} step${form.steps.length === 1 ? "" : "s"}`} />
       </div>
 
-      {/* Simulate button */}
-      <div className="flex items-center justify-center mt-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5 cursor-pointer"
-          onClick={(e) => {
-            e.preventDefault();
-            setSimulateOpen(true);
-          }}
-        >
-          <IconPlayerPlay className="size-3.5" />
-          Simulate Process
-        </Button>
-      </div>
+      {/* Simulate section */}
+      {form.steps.length > 0 && (
+        <div className="flex flex-col gap-3 p-4 border rounded-xl bg-card">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold">Simulate this process</p>
+              <p className="text-xs text-muted-foreground">
+                Run a test execution to preview agent responses and file outputs before saving.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={(e) => { e.preventDefault(); setSimulateOpen(true); }}
+              className="gap-1.5 cursor-pointer shrink-0"
+            >
+              <IconPlayerPlay className="size-3.5" />
+              Run Simulation
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Step summary cards */}
       <div className="flex flex-col gap-2 mt-1">
@@ -673,6 +679,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
         <ProcessSimulateModal
           open={simulateOpen}
           processName={form.name}
+          autoStart
           steps={form.steps.map((s) => ({
             title: s.title,
             instruction: s.instruction,

@@ -124,11 +124,18 @@ async function expandOccurrences(event, from, to) {
     const rule = new RRule(opts);
     const rawDates = rule.between(from, rangeEnd, true);
 
-    // For each expanded date, re-anchor to the original local time
-    // This fixes DST: 02:08 CET stays 02:08 CEST
+    // Snap local time to nearest 15-min boundary in case of drift
+    const [lh, lm] = localTime.split(":").map(Number);
+    const snappedMin = Math.round(lm / 15) * 15;
+    const snappedH = snappedMin >= 60 ? (lh + 1) % 24 : lh;
+    const snappedM = snappedMin >= 60 ? 0 : snappedMin;
+    const snappedTime = `${String(snappedH).padStart(2, "0")}:${String(snappedM).padStart(2, "0")}`;
+
+    // For each expanded date, re-anchor to the snapped local time
+    // This fixes DST: 02:00 CET stays 02:00 CEST
     return rawDates.map((d) => {
       const { date: occDate } = extractLocalTime(d, tz);
-      return localTimeToUTC(occDate, localTime, tz);
+      return localTimeToUTC(occDate, snappedTime, tz);
     });
   } catch (err) {
     console.warn("[agenda-scheduler] RRULE expansion failed:", err.message);

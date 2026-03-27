@@ -183,6 +183,80 @@ is_valid_service() {
   return 1
 }
 
+# ── Watchdog ───────────────────────────────────────────────
+# Runs in the background, checks every 30s, restarts dead services.
+WATCHDOG_PID_FILE="$PID_DIR/watchdog.pid"
+WATCHDOG_LOG="$LOG_DIR/watchdog.log"
+WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-30}"
+
+# Services the watchdog should NOT auto-restart (one-shot or optional)
+WATCHDOG_SKIP="gateway-sync"
+
+run_watchdog() {
+  echo "[watchdog] Started (pid $$, interval ${WATCHDOG_INTERVAL}s)" >> "$WATCHDOG_LOG"
+  while true; do
+    sleep "$WATCHDOG_INTERVAL"
+    for svc in $SERVICES; do
+      # Skip services that shouldn't auto-restart
+      case " $WATCHDOG_SKIP " in *" $svc "*) continue ;; esac
+
+      local pid_file="${SERVICE_PIDS[$svc]}"
+      local pid
+      pid="$(cat "$pid_file" 2>/dev/null)" || true
+
+      if [ -z "$pid" ] || ! pid_running "$pid"; then
+        echo "[watchdog] $(date -u +%Y-%m-%dT%H:%M:%SZ) $svc is DOWN — restarting..." >> "$WATCHDOG_LOG"
+        # Clean up stale pid
+        rm -f "$pid_file"
+        # Restart the service
+        cd "$PROJECT_ROOT"
+        local cmd="${SERVICE_CMDS[$svc]}"
+        local log_file="${SERVICE_LOG_FILES[$svc]}"
+
+        # nextjs needs port cleanup
+        if [ "$svc" = "nextjs" ]; then
+          kill_port 3000
+          sleep 1
+        fi
+
+        ( exec bash -c "$cmd" >> "$log_file" 2>&1 ) &
+        local new_pid=$!
+        echo "$new_pid" > "$pid_file"
+        sleep 1
+        if pid_running "$new_pid"; then
+          echo "[watchdog] $(date -u +%Y-%m-%dT%H:%M:%SZ) $svc restarted (pid $new_pid)" >> "$WATCHDOG_LOG"
+        else
+          echo "[watchdog] $(date -u +%Y-%m-%dT%H:%M:%SZ) $svc FAILED to restart — check $log_file" >> "$WATCHDOG_LOG"
+          rm -f "$pid_file"
+        fi
+      fi
+    done
+  done
+}
+
+start_watchdog() {
+  if pid_running "$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)"; then
+    echo "  watchdog — already running (pid $(cat "$WATCHDOG_PID_FILE"))"
+    return 0
+  fi
+  run_watchdog &
+  local wpid=$!
+  echo "$wpid" > "$WATCHDOG_PID_FILE"
+  echo "  watchdog — started (pid $wpid, checking every ${WATCHDOG_INTERVAL}s)"
+}
+
+stop_watchdog() {
+  local wpid
+  wpid="$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)" || true
+  if [ -n "$wpid" ] && pid_running "$wpid"; then
+    kill "$wpid" 2>/dev/null
+    echo "  watchdog — stopped"
+  else
+    echo "  watchdog — not running"
+  fi
+  rm -f "$WATCHDOG_PID_FILE"
+}
+
 # ── Commands ───────────────────────────────────────────────
 CMD="${1:-status}"
 TARGET_SERVICE="${2:-}"
@@ -211,6 +285,7 @@ case "$CMD" in
         start_service "$svc"
       done
       echo "[mc-services] All services started."
+      start_watchdog
     fi
     ;;
   stop)
@@ -219,6 +294,7 @@ case "$CMD" in
       stop_service "$TARGET_SERVICE"
     else
       echo "[mc-services] Stopping services..."
+      stop_watchdog
       for svc in $SERVICES; do
         stop_service "$svc"
       done
@@ -246,10 +322,20 @@ case "$CMD" in
       for svc in $SERVICES; do
         status_service "$svc"
       done
+      # Watchdog status
+      if pid_running "$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)"; then
+        echo "  watchdog — RUNNING (pid $(cat "$WATCHDOG_PID_FILE"))"
+      else
+        echo "  watchdog — STOPPED"
+      fi
     fi
     ;;
+  watch)
+    # Start only the watchdog (useful if services are already running)
+    start_watchdog
+    ;;
   *)
-    echo "Usage: mc-services {start|stop|restart|status} [service-name]"
+    echo "Usage: mc-services {start|stop|restart|status|watch} [service-name]"
     echo "Services: $SERVICES"
     exit 1
     ;;

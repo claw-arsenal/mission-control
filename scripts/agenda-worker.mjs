@@ -8,7 +8,7 @@
 import postgres from "postgres";
 import { Worker } from "bullmq";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile, readFile, stat, copyFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, stat, copyFile, truncate, unlink, open } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve, basename, extname } from "node:path";
 import * as dns from "node:dns";
@@ -94,6 +94,258 @@ async function sendTelegramNotification(message, agentId = "main") {
   }
 }
 
+// ── Cleanup system helpers ────────────────────────────────────────────────────
+
+const CLEANUP_ALLOWED_PREFIXES = ["/home/clawdbot/", "/storage/", "/tmp/"];
+
+/**
+ * Get session file path and current byte offset for an agent's main session.
+ * Returns { agentId, sessionFilePath, byteOffset } or null if not found.
+ */
+async function getAgentSessionSnapshot(agentId) {
+  const sessionsPath = resolve(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`);
+  try {
+    const raw = await readFile(sessionsPath, "utf8");
+    const data = JSON.parse(raw);
+    // Look for agent:<id>:main session key
+    const mainKey = `agent:${agentId}:main`;
+    const entry = data[mainKey];
+    if (!entry?.sessionId) {
+      console.warn(`[agenda-worker] No main session found for agent ${agentId} (key: ${mainKey})`);
+      return null;
+    }
+    const sessionFilePath = entry.sessionFile || resolve(OPENCLAW_HOME, `agents/${agentId}/sessions/${entry.sessionId}.jsonl`);
+    let byteOffset = 0;
+    try {
+      const s = await stat(sessionFilePath);
+      byteOffset = s.size;
+    } catch {
+      // File doesn't exist yet — offset 0
+    }
+    return { agentId, sessionFilePath, byteOffset };
+  } catch (err) {
+    console.warn(`[agenda-worker] Failed to read sessions.json for agent ${agentId}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Acquire per-agent execution locks. Returns { acquired: string[], failed: string[] }.
+ */
+async function acquireAgentLocks(agentIds, occurrenceId) {
+  const acquired = [];
+  const failed = [];
+  for (const agentId of agentIds) {
+    try {
+      const [row] = await sql`
+        INSERT INTO agent_execution_locks (agent_id, occurrence_id, locked_at)
+        VALUES (${agentId}, ${occurrenceId}, now())
+        ON CONFLICT DO NOTHING
+        RETURNING agent_id
+      `;
+      if (row) {
+        acquired.push(agentId);
+      } else {
+        failed.push(agentId);
+      }
+    } catch (err) {
+      console.warn(`[agenda-worker] Lock acquire error for agent ${agentId}:`, err.message);
+      failed.push(agentId);
+    }
+  }
+  return { acquired, failed };
+}
+
+/**
+ * Release per-agent execution locks.
+ */
+async function releaseAgentLocks(agentIds) {
+  for (const agentId of agentIds) {
+    try {
+      await sql`DELETE FROM agent_execution_locks WHERE agent_id = ${agentId}`;
+    } catch (err) {
+      console.warn(`[agenda-worker] Lock release error for agent ${agentId}:`, err.message);
+    }
+  }
+}
+
+/**
+ * Parse session file bytes for memory_store IDs.
+ * Looks for tool results containing memory_store with UUID patterns.
+ */
+function parseMemoryStoreIds(sessionBytes) {
+  const ids = [];
+  const text = sessionBytes.toString("utf8");
+  const lines = text.split("\n").filter(Boolean);
+  for (const line of lines) {
+    try {
+      // Only care about lines that mention memory_store
+      if (!line.includes("memory_store")) continue;
+      // Look for UUID patterns in the context of memory_store results
+      // Pattern: "id":"<uuid>" or "id": "<uuid>"
+      const uuidRegex = /["']id["']\s*:\s*["']([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']/gi;
+      let match;
+      while ((match = uuidRegex.exec(line)) !== null) {
+        ids.push(match[1]);
+      }
+    } catch { /* skip unparseable lines */ }
+  }
+  return [...new Set(ids)];
+}
+
+/**
+ * Delete memory entries from Qdrant via REST API.
+ */
+async function deleteQdrantMemories(memoryIds) {
+  if (memoryIds.length === 0) return { deleted: [], errors: [] };
+  const deleted = [];
+  const errors = [];
+  try {
+    const resp = await fetch("http://localhost:6333/collections/memories/points/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ points: memoryIds }),
+    });
+    if (resp.ok) {
+      deleted.push(...memoryIds);
+      console.log(`[agenda-worker] Deleted ${memoryIds.length} memory entries from Qdrant`);
+    } else {
+      const body = await resp.text();
+      errors.push(`Qdrant delete failed (${resp.status}): ${body.slice(0, 200)}`);
+      console.warn(`[agenda-worker] Qdrant delete failed:`, resp.status, body.slice(0, 200));
+    }
+  } catch (err) {
+    errors.push(`Qdrant delete error: ${err.message}`);
+    console.warn(`[agenda-worker] Qdrant delete error:`, err.message);
+  }
+  return { deleted, errors };
+}
+
+/**
+ * Run full cleanup for a failed attempt.
+ * Order: Qdrant → session truncation → file deletion
+ */
+async function runFailureCleanup(runAttemptId, snapshots, detectedFilePaths, attemptStartTime) {
+  const details = { memoryIds: [], filesDeleted: [], sessionsRestored: 0, errors: [] };
+
+  try {
+    // Mark cleanup as pending
+    await sql`UPDATE agenda_run_attempts SET cleanup_status = 'pending' WHERE id = ${runAttemptId}`;
+
+    // Phase 1: Qdrant memory cleanup
+    for (const snap of snapshots) {
+      try {
+        const { sessionFilePath, byteOffset } = snap;
+        const currentStat = await stat(sessionFilePath).catch(() => null);
+        if (!currentStat || currentStat.size <= byteOffset) continue;
+
+        const fd = await open(sessionFilePath, "r");
+        try {
+          const bytesToRead = currentStat.size - byteOffset;
+          const buf = Buffer.alloc(bytesToRead);
+          await fd.read(buf, 0, bytesToRead, byteOffset);
+          const memoryIds = parseMemoryStoreIds(buf);
+          if (memoryIds.length > 0) {
+            const result = await deleteQdrantMemories(memoryIds);
+            details.memoryIds.push(...result.deleted);
+            details.errors.push(...result.errors);
+          }
+        } finally {
+          await fd.close();
+        }
+      } catch (err) {
+        details.errors.push(`Memory cleanup for ${snap.agentId}: ${err.message}`);
+      }
+    }
+
+    // Phase 2: Session file truncation
+    for (const snap of snapshots) {
+      try {
+        const { sessionFilePath, byteOffset, agentId } = snap;
+        if (!sessionFilePath || typeof byteOffset !== "number" || byteOffset < 0) {
+          details.errors.push(`${agentId}: invalid snapshot data`);
+          continue;
+        }
+        if (!sessionFilePath.includes("/.openclaw/agents/") || !sessionFilePath.endsWith(".jsonl")) {
+          details.errors.push(`${agentId}: path rejected (safety check)`);
+          continue;
+        }
+        const currentStat = await stat(sessionFilePath).catch(() => null);
+        if (!currentStat || !currentStat.isFile()) continue;
+        if (currentStat.size > byteOffset) {
+          await truncate(sessionFilePath, byteOffset);
+          details.sessionsRestored++;
+          console.log(`[agenda-worker] Truncated session for agent ${agentId}: ${currentStat.size} → ${byteOffset} bytes`);
+        }
+      } catch (err) {
+        details.errors.push(`Session truncate for ${snap.agentId}: ${err.message}`);
+      }
+    }
+
+    // Phase 3: File deletion
+    const startTime = new Date(attemptStartTime).getTime();
+    for (const filePath of detectedFilePaths) {
+      try {
+        if (!CLEANUP_ALLOWED_PREFIXES.some((p) => filePath.startsWith(p))) continue;
+        const cleaned = filePath.replace(/[.,;:!?)}\]]+$/, "");
+        const fstat = await stat(cleaned).catch(() => null);
+        if (!fstat || !fstat.isFile()) continue;
+        // Only delete files created AFTER attempt start
+        const ctime = fstat.ctimeMs || fstat.birthtimeMs;
+        if (ctime && ctime > startTime) {
+          await unlink(cleaned);
+          details.filesDeleted.push(cleaned);
+          console.log(`[agenda-worker] Deleted file: ${cleaned}`);
+        }
+      } catch (err) {
+        details.errors.push(`File delete ${filePath}: ${err.message}`);
+      }
+    }
+
+    // Mark cleanup as completed
+    const status = details.errors.length > 0 ? "failed" : "completed";
+    await sql`
+      UPDATE agenda_run_attempts
+      SET cleanup_status = ${status}, cleanup_details = ${sql.json(details)}
+      WHERE id = ${runAttemptId}
+    `;
+    console.log(`[agenda-worker] Cleanup ${status} for attempt ${runAttemptId}: ${details.sessionsRestored} sessions restored, ${details.memoryIds.length} memories deleted, ${details.filesDeleted.length} files deleted`);
+  } catch (err) {
+    console.error(`[agenda-worker] Cleanup error for attempt ${runAttemptId}:`, err.message);
+    details.errors.push(`Cleanup error: ${err.message}`);
+    try {
+      await sql`
+        UPDATE agenda_run_attempts
+        SET cleanup_status = 'failed', cleanup_details = ${sql.json(details)}
+        WHERE id = ${runAttemptId}
+      `;
+    } catch { /* best effort */ }
+  }
+  return details;
+}
+
+/**
+ * Recover incomplete cleanups from previous crashes.
+ */
+async function recoverPendingCleanups() {
+  try {
+    const pending = await sql`
+      SELECT id, session_snapshots, cleanup_details
+      FROM agenda_run_attempts
+      WHERE cleanup_status = 'pending'
+    `;
+    if (pending.length === 0) return;
+    console.log(`[agenda-worker] Recovering ${pending.length} pending cleanup(s)...`);
+    for (const row of pending) {
+      const snapshots = row.session_snapshots || [];
+      // Re-run cleanup (idempotent operations)
+      await runFailureCleanup(row.id, snapshots, [], new Date(0));
+    }
+  } catch (err) {
+    console.warn(`[agenda-worker] Pending cleanup recovery failed:`, err.message);
+  }
+}
+
 const agendaWorker = new Worker(
   "agenda",
   async (job) => {
@@ -122,6 +374,32 @@ const agendaWorker = new Worker(
       return { skipped: true, reason: 'missed_window' };
     }
 
+    // ── Per-agent execution locks ─────────────────────────────────────────────
+    // Collect all unique agent IDs from this job (free prompt agent + process step agents)
+    const allAgentIds = new Set();
+    allAgentIds.add(agentId || "main");
+    if (processes) {
+      for (const proc of processes) {
+        // We'll also pick up step-level agent IDs during execution, but lock the
+        // event-level agent for now. Step agents are typically the same.
+        // Process step agents are loaded later, so we lock the default here.
+      }
+    }
+    const uniqueAgentIds = [...allAgentIds];
+
+    const { acquired: lockedAgents, failed: lockFailed } = await acquireAgentLocks(uniqueAgentIds, occurrenceId);
+    if (lockFailed.length > 0) {
+      // Release any locks we did acquire
+      await releaseAgentLocks(lockedAgents);
+      console.log(`[agenda-worker] Agent lock contention for ${occurrenceId} (agents: ${lockFailed.join(", ")}), re-queuing with 30s delay`);
+      // Re-queue with delay
+      const { Queue } = await import("bullmq");
+      const requeue = new Queue("agenda", { connection: { host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD } });
+      await requeue.add("agenda-event", job.data, { delay: 30000 });
+      await requeue.close();
+      return { skipped: true, reason: 'agent_locked' };
+    }
+
     // ── Postgres-level claim lock ─────────────────────────────────────────────
     const [claimed] = await sql`
       UPDATE agenda_occurrences SET status = 'running', locked_at = now()
@@ -129,6 +407,7 @@ const agendaWorker = new Worker(
       RETURNING id, latest_attempt_no
     `;
     if (!claimed) {
+      await releaseAgentLocks(lockedAgents);
       console.log(`[agenda-worker] Occurrence ${occurrenceId} already claimed, skipping`);
       return { skipped: true, reason: 'already_claimed' };
     }
@@ -136,16 +415,26 @@ const agendaWorker = new Worker(
 
     const attemptNo = (claimed.latest_attempt_no ?? 0) + 1;
 
+    // ── Session snapshots (pre-execution) ─────────────────────────────────────
+    const sessionSnapshots = [];
+    for (const aid of uniqueAgentIds) {
+      const snap = await getAgentSessionSnapshot(aid);
+      if (snap) sessionSnapshots.push(snap);
+    }
+
     // ── Create run attempt ────────────────────────────────────────────────────
     const [attempt] = await sql`
-      insert into agenda_run_attempts (occurrence_id, attempt_no, status, started_at)
-      values (${occurrenceId}, ${attemptNo}, 'running', now())
+      insert into agenda_run_attempts (occurrence_id, attempt_no, status, started_at, session_snapshots)
+      values (${occurrenceId}, ${attemptNo}, 'running', now(), ${sql.json(sessionSnapshots)})
       returning *
     `;
 
     const runAttemptId = attempt.id;
+    const attemptStartTime = attempt.started_at;
     let overallSuccess = true;
     const stepSummaries = [];
+    // Track all file paths detected across all steps for cleanup
+    const allDetectedFilePaths = [];
 
     // ── Load settings ──────────────────────────────────────────────────────
     const [settingsRow] = await sql`SELECT auto_retry_after_minutes, max_retries, default_fallback_model FROM worker_settings WHERE id = 1 LIMIT 1`;
@@ -207,6 +496,7 @@ const agendaWorker = new Worker(
           overrideModel, sql,
         });
         results.push({ type: "free_prompt", success: r.success, summary: r.output.slice(0, 200) });
+        if (r.detectedPaths) allDetectedFilePaths.push(...r.detectedPaths);
         if (!r.success) { success = false; return { success, results }; }
         ctx = `Previous output (free prompt):\n${r.output.slice(0, 500)}\n\n`;
       }
@@ -227,6 +517,7 @@ const agendaWorker = new Worker(
             overrideModel, sql,
           });
           results.push({ type: "process_step", processVersionId: pvId, stepId: stepRow.id, stepTitle: stepRow.title, success: r.success, summary: r.output.slice(0, 200), error: r.error });
+          if (r.detectedPaths) allDetectedFilePaths.push(...r.detectedPaths);
           ctx += `Previous output (${stepRow.title || 'Step ' + stepRow.step_order}):\n${r.output.slice(0, 500)}\n\n`;
           if (!r.success) { success = false; return { success, results }; }
         }
@@ -286,7 +577,14 @@ const agendaWorker = new Worker(
         await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "succeeded", occurrenceId })})`;
         console.log(`[agenda-worker] Completed occurrence ${occurrenceId} — succeeded`);
       } else {
-        // All retries exhausted → needs_retry
+        // All retries exhausted → run cleanup before setting needs_retry
+        console.log(`[agenda-worker] Running failure cleanup for occurrence ${occurrenceId}...`);
+        try {
+          await runFailureCleanup(runAttemptId, sessionSnapshots, [...new Set(allDetectedFilePaths)], attemptStartTime);
+        } catch (cleanupErr) {
+          console.error(`[agenda-worker] Cleanup failed for ${occurrenceId}:`, cleanupErr.message);
+        }
+
         await sql`
           update agenda_occurrences
           set status = 'needs_retry', latest_attempt_no = ${attemptNo}
@@ -299,6 +597,8 @@ const agendaWorker = new Worker(
 
       clearTimeout(alertTimer);
       if (autoRetryTimer) clearTimeout(autoRetryTimer);
+      // Release agent execution locks
+      await releaseAgentLocks(lockedAgents);
       return { success: overallSuccess, summary: summaryText };
     } catch (error) {
       clearTimeout(alertTimer);
@@ -310,6 +610,14 @@ const agendaWorker = new Worker(
         where id = ${runAttemptId}
       `;
 
+      // Run cleanup on fatal error too
+      console.log(`[agenda-worker] Running failure cleanup for fatal error on ${occurrenceId}...`);
+      try {
+        await runFailureCleanup(runAttemptId, sessionSnapshots, [...new Set(allDetectedFilePaths)], attemptStartTime);
+      } catch (cleanupErr) {
+        console.error(`[agenda-worker] Cleanup failed for ${occurrenceId}:`, cleanupErr.message);
+      }
+
       // Fatal error → needs_retry directly
       await sql`
         update agenda_occurrences
@@ -319,6 +627,8 @@ const agendaWorker = new Worker(
       await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "failed", occurrenceId })})`;
       await sendTelegramNotification(`❌ Agenda event "${title}" failed: ${msg.slice(0, 200)}`, agentId || "main");
 
+      // Release agent execution locks
+      await releaseAgentLocks(lockedAgents);
       console.error(`[agenda-worker] Fatal error on ${occurrenceId}:`, msg);
       throw error;
     }
@@ -368,6 +678,7 @@ async function runAgentStep({
   let success = true;
   let artifactData = null;
   let usedFallback = false;
+  let detectedPaths = [];
 
   async function executeAgent(modelOverride = null) {
     const effectiveModel = modelOverride || overrideModel || null;
@@ -445,7 +756,7 @@ async function runAgentStep({
     // ── Detect files mentioned in agent text output ───────────────────────
     if (success && output) {
       const pathRegex = /(\/(?:home|storage|tmp|var|opt|root)[^\s`"')\]>]+\.\w{1,10})/g;
-      const detectedPaths = [...new Set((output.match(pathRegex) || []))];
+      detectedPaths = [...new Set((output.match(pathRegex) || []))];
       const discoveredFiles = [];
 
       for (const p of detectedPaths) {
@@ -529,7 +840,7 @@ async function runAgentStep({
     )
   `;
 
-  return { success, output, error: errorMsg, artifacts: artifactData };
+  return { success, output, error: errorMsg, artifacts: artifactData, detectedPaths: detectedPaths ?? [] };
 }
 
 // ── Stale lock recovery ───────────────────────────────────────────────────────
@@ -560,6 +871,20 @@ async function recoverStaleLocks() {
         );
       }
     }
+
+    // Recover stale agent execution locks (>20 minutes old)
+    try {
+      const staleLocks = await sql`
+        DELETE FROM agent_execution_locks
+        WHERE locked_at < now() - interval '20 minutes'
+        RETURNING agent_id
+      `;
+      if (staleLocks.length > 0) {
+        console.log(`[agenda-worker] Recovered ${staleLocks.length} stale agent execution lock(s): ${staleLocks.map(r => r.agent_id).join(", ")}`);
+      }
+    } catch (err) {
+      console.warn("[agenda-worker] Stale agent lock recovery failed:", err.message);
+    }
   } catch (err) {
     console.warn("[agenda-worker] Stale lock recovery failed:", err.message);
   }
@@ -568,6 +893,7 @@ async function recoverStaleLocks() {
 // Run recovery on startup + every 5 minutes
 await mkdir("/storage/mission-control/artifacts", { recursive: true }).catch(() => {});
 await recoverStaleLocks();
+await recoverPendingCleanups();
 setInterval(recoverStaleLocks, 5 * 60 * 1000);
 
 // ── Healthcheck ───────────────────────────────────────────────────────────────

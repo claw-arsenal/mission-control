@@ -309,6 +309,28 @@ export async function POST(request: Request) {
       if (!title) return fail("Title is required.");
       if (!startsAt || isNaN(startsAt.getTime())) return fail("Valid start date is required.");
 
+      // Enforce 15-minute scheduling intervals
+      if (startsAt.getMinutes() % 15 !== 0) {
+        return fail("Events can only be scheduled at 15-minute intervals (XX:00, XX:15, XX:30, XX:45)");
+      }
+
+      // Enforce unique time slot — only one event per 15-min slot
+      // Check for active/draft events that start in the same 15-min window
+      const slotStart = new Date(startsAt);
+      slotStart.setSeconds(0, 0);
+      const slotEnd = new Date(slotStart.getTime() + 15 * 60 * 1000);
+      const [conflict] = await sql`
+        SELECT id, title FROM agenda_events
+        WHERE workspace_id = ${wid}
+          AND status IN ('active', 'draft')
+          AND starts_at >= ${slotStart}
+          AND starts_at < ${slotEnd}
+        LIMIT 1
+      `;
+      if (conflict) {
+        return fail(`Time slot already taken by "${conflict.title}". Events must be at least 15 minutes apart.`);
+      }
+
       const [event] = await sql`
         insert into agenda_events (
           workspace_id, title, free_prompt, default_agent_id,

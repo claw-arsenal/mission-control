@@ -364,6 +364,17 @@ create table if not exists agenda_run_attempts (
 
 create index if not exists idx_agenda_run_attempts_occurrence on agenda_run_attempts(occurrence_id);
 
+-- Phase 4: Cleanup system for failed agenda attempts
+ALTER TABLE agenda_run_attempts ADD COLUMN IF NOT EXISTS session_snapshots jsonb;
+ALTER TABLE agenda_run_attempts ADD COLUMN IF NOT EXISTS cleanup_status text;
+ALTER TABLE agenda_run_attempts ADD COLUMN IF NOT EXISTS cleanup_details jsonb;
+
+CREATE TABLE IF NOT EXISTS agent_execution_locks (
+  agent_id TEXT PRIMARY KEY,
+  occurrence_id UUID,
+  locked_at TIMESTAMPTZ DEFAULT now()
+);
+
 create table if not exists agenda_run_steps (
   id uuid primary key default gen_random_uuid(),
   run_attempt_id uuid not null references agenda_run_attempts(id) on delete cascade,

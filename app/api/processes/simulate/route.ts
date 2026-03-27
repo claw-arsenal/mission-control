@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/local-db";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { stat } from "node:fs/promises";
+import { stat, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 const execFileAsync = promisify(execFile);
+
+const AGENTS_DIR = join(homedir(), ".openclaw", "agents");
 
 type ProcessStep = {
   title?: string;
@@ -20,7 +24,36 @@ type ProcessStep = {
   timeoutSeconds?: number | null;
 };
 
-export async function POST(request: Request) {
+type SessionSnapshot = {
+  agentId: string;
+  sessionFilePath: string;
+  byteOffset: number;
+};
+
+/**
+ * Resolve the active session file for an agent by reading sessions.json
+ * and finding the agent:<id>:main entry.
+ */
+async function getAgentSessionFile(agentId: string): Promise<{ path: string; size: number } | null> {
+  try {
+    const sessionsJsonPath = join(AGENTS_DIR, agentId, "sessions", "sessions.json");
+    const raw = await readFile(sessionsJsonPath, "utf-8");
+    const data = JSON.parse(raw) as Record<string, { sessionId?: string }>;
+
+    // Look for the main session key: agent:<id>:main
+    const mainKey = `agent:${agentId}:main`;
+    const entry = data[mainKey];
+    if (!entry?.sessionId) return null;
+
+    const filePath = join(AGENTS_DIR, agentId, "sessions", `${entry.sessionId}.jsonl`);
+    const s = await stat(filePath);
+    return { path: filePath, size: s.size };
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(request: Request): Promise<Response> {
   const sql = getSql();
   const body = await request.json();
 
@@ -36,10 +69,28 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (data: Record<string, unknown>) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      const send = (data: Record<string, unknown>) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       const allFiles: string[] = [];
       const pathRegex = /(\/(?:home|storage|tmp|var|opt|root)[^\s\`"')\]>]+\.\w{1,10})/g;
 
+      // ── Snapshot session files BEFORE simulation ──────────────────────
+      // Collect unique agent IDs used in this simulation
+      const agentIds = [...new Set(steps.map((s) => s.agent_id || s.agentId || "main"))];
+      const snapshots: SessionSnapshot[] = [];
+
+      for (const aid of agentIds) {
+        const session = await getAgentSessionFile(aid);
+        if (session) {
+          snapshots.push({
+            agentId: aid,
+            sessionFilePath: session.path,
+            byteOffset: session.size,
+          });
+        }
+      }
+
+      // ── Run simulation steps ──────────────────────────────────────────
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
         const agentId = step.agent_id || step.agentId || "main";
@@ -58,26 +109,43 @@ export async function POST(request: Request) {
           modelOverride: modelOverride || null,
         });
 
-        const args = ["agent", "--agent", agentId, "--message", `[SIMULATION MODE — do not make permanent changes, only show what you would do]\n\n${instruction}`, "--json"];
+        const args = [
+          "agent",
+          "--agent", agentId,
+          "--message", `[SIMULATION MODE — do not make permanent changes, only show what you would do]\n\n${instruction}`,
+          "--json",
+        ];
         if (skillKey) args.push("--skill", skillKey);
         if (modelOverride) args.push("--model", modelOverride);
 
         try {
-          const { stdout } = await execFileAsync("openclaw", args, { timeout, env: process.env, maxBuffer: 50 * 1024 * 1024 });
+          const { stdout } = await execFileAsync("openclaw", args, {
+            timeout,
+            env: process.env,
+            maxBuffer: 50 * 1024 * 1024,
+          });
           const parsed = JSON.parse(stdout);
           const payloads = parsed?.result?.payloads ?? parsed?.payloads ?? [];
-          const output = payloads.map((p: { text?: string }) => p.text ?? "").join("\n").trim() || JSON.stringify(parsed);
-          const detected = [...new Set((output.match(pathRegex) || []) as string[])].map((p: string) => p.replace(/[.,;:!?)}\]]+$/, ""));
+          const output = payloads
+            .map((p: { text?: string }) => p.text ?? "")
+            .join("\n")
+            .trim() || JSON.stringify(parsed);
+
+          // Detect files created during this step
+          const detected = [...new Set((output.match(pathRegex) || []) as string[])].map(
+            (p: string) => p.replace(/[.,;:!?)}\]]+$/, "")
+          );
           const stepFiles: Array<{ path: string; name: string; size: number }> = [];
           for (const p of detected) {
             try {
               const s = await stat(p);
               if (s.isFile()) stepFiles.push({ path: p, name: p.split("/").pop() || p, size: s.size });
             } catch {
-              // ignore
+              // ignore — file doesn't exist or not accessible
             }
           }
-          allFiles.push(...stepFiles.map(f => f.path));
+          allFiles.push(...stepFiles.map((f) => f.path));
+
           send({
             stepIndex: i,
             status: "succeeded",
@@ -104,7 +172,12 @@ export async function POST(request: Request) {
         }
       }
 
-      send({ done: true, allFilesCreated: allFiles });
+      send({
+        done: true,
+        allFilesCreated: allFiles,
+        // Send snapshots so the cleanup endpoint can truncate session files
+        sessionSnapshots: snapshots,
+      });
       controller.close();
     },
   });

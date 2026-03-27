@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle, CardAction } from "@/components/ui/card";
 import {
   IconPlayerPlay,
@@ -48,6 +47,7 @@ type Props = {
     modelOverride?: string;
     timeoutSeconds?: number | null;
   }>;
+  autoStart?: boolean;
   onClose: () => void;
 };
 
@@ -109,14 +109,17 @@ function isImageFile(name: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(name);
 }
 
-export function ProcessSimulateModal({ open, processId, processName, steps, onClose }: Props) {
+export function ProcessSimulateModal({ open, processId, processName, steps, autoStart, onClose }: Props) {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [stepResults, setStepResults] = useState<StepResult[]>([]);
   const [allFiles, setAllFiles] = useState<string[]>([]);
+  const [sessionSnapshots, setSessionSnapshots] = useState<Array<{ agentId: string; sessionFilePath: string; byteOffset: number }>>([]);
   const [cleaning, setCleaning] = useState(false);
   const [cleaned, setCleaned] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
     if (!open) {
@@ -124,17 +127,29 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
       setDone(false);
       setStepResults([]);
       setAllFiles([]);
+      setSessionSnapshots([]);
       setCleaning(false);
       setCleaned(false);
+      autoStartedRef.current = false;
       abortRef.current?.abort();
     }
   }, [open]);
+
+  useEffect(() => {
+    if (open && autoStart && !autoStartedRef.current && !running && !done) {
+      autoStartedRef.current = true;
+      // Delay slightly so the dialog renders first
+      const t = setTimeout(() => startSimulation(), 150);
+      return () => clearTimeout(t);
+    }
+  }, [open, autoStart]);
 
   const startSimulation = async () => {
     setRunning(true);
     setDone(false);
     setStepResults([]);
     setAllFiles([]);
+    setSessionSnapshots([]);
     setCleaned(false);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -162,6 +177,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
             const data = JSON.parse(line.slice(6));
             if (data.done) {
               setAllFiles(data.allFilesCreated || []);
+              setSessionSnapshots(data.sessionSnapshots || []);
               setDone(true);
               setRunning(false);
               continue;
@@ -194,19 +210,24 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
     }
   };
 
+  const hasSnapshots = sessionSnapshots.length > 0;
+
   const handleCleanup = async () => {
-    if (allFiles.length === 0) return;
+    if (allFiles.length === 0 && !hasSnapshots) return;
     setCleaning(true);
     try {
       const res = await fetch("/api/processes/simulate/cleanup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: allFiles }),
+        body: JSON.stringify({ files: allFiles, sessionSnapshots }),
       });
       const json = await res.json();
       if (json.ok) {
-        toast.success(`Cleaned up ${json.deleted.length} file(s)`);
-        if (json.errors.length > 0) toast.warning(`${json.errors.length} file(s) could not be deleted`);
+        const parts: string[] = [];
+        if (json.deleted.length > 0) parts.push(`${json.deleted.length} file(s)`);
+        if (json.sessionsRestored > 0) parts.push(`${json.sessionsRestored} session(s) restored`);
+        toast.success(`Cleaned up ${parts.join(" and ")}`);
+        if (json.errors.length > 0) toast.warning(`${json.errors.length} item(s) could not be cleaned`);
         setCleaned(true);
       }
     } catch { toast.error("Cleanup failed"); }
@@ -218,8 +239,8 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) { abortRef.current?.abort(); onClose(); } }}>
-      <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-hidden flex flex-col p-0">
-        <DialogHeader className="px-6 pt-6 pb-3">
+      <DialogContent className="sm:max-w-[700px] max-h-[85vh] flex flex-col p-0 overflow-hidden">
+        <DialogHeader className="px-6 pt-6 pb-3 shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <DialogTitle className="flex items-center gap-2">
@@ -241,7 +262,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
           </div>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 px-6 pb-6">
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
           {stepResults.length === 0 && !running ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <IconPlayerPlay className="size-10 text-muted-foreground/40 mb-3" />
@@ -379,18 +400,19 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
 
         {/* Footer with cleanup */}
         {done && (
-          <div className="border-t px-6 py-4 flex items-center justify-between">
+          <div className="border-t px-6 py-4 flex items-center justify-between shrink-0">
             <div className="text-xs text-muted-foreground">
               {allFiles.length > 0
                 ? `${allFiles.length} file(s) created during simulation`
                 : "No files created during simulation"}
+              {hasSnapshots && ` · ${sessionSnapshots.length} agent session(s) tracked`}
             </div>
             <div className="flex items-center gap-2">
-              {allFiles.length > 0 && !cleaned && (
+              {(allFiles.length > 0 || hasSnapshots) && !cleaned && (
                 <Button
                   variant="destructive"
                   size="sm"
@@ -399,7 +421,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, onCl
                   className="gap-1.5 cursor-pointer"
                 >
                   {cleaning ? <IconLoader2 className="size-3.5 animate-spin" /> : <IconTrash className="size-3.5" />}
-                  {cleaning ? "Cleaning..." : "Cleanup Files"}
+                  {cleaning ? "Cleaning..." : "Cleanup All"}
                 </Button>
               )}
               {cleaned && (

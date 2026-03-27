@@ -135,6 +135,7 @@ The task-worker and agenda-worker send Telegram notifications for lifecycle even
 - **DB-time execution window check**: uses `SELECT now()` from Postgres, not worker's local clock — avoids clock skew
 - **Date-range-per-view**: month/week/day views each fetch their exact visible range (with ±1 day buffer for timezone edge cases)
 - Multi-step creation wizard: Type → Details → Schedule → Review
+- **Simulation on Review step**: test-run the full event (free prompt + attached processes) before creating it, with full cleanup support (files + chat history)
 - One-time (date + time) or Repeatable (daily/weekly with RRULE)
 - Free prompt and/or attached processes per event
 - Agent + model override per event
@@ -164,20 +165,18 @@ When an agenda event runs:
 Step 1: Execute all steps (free prompt + attached processes)
    ↓ succeeded? → done ✅
    ↓ failed?
-Step 2: Auto-retry (same model, instant, no delay)
-        Retries up to max_retries times (default: 1, configurable 0–5 in Settings)
+Step 1.5: Cleanup failed attempt (Qdrant → session → files)
+   ↓
+Step 2: Auto-retry (clean slate, same model, instant)
+        Retries up to max_retries times (default: 1)
    ↓ succeeded? → done ✅
+   ↓ failed? → cleanup again
    ↓ all auto-retries failed?
-Step 3: Check — does this event have a fallback model?
-        (set per-event in the event modal)
-   ↓ no fallback model → skip to Step 4
-   ↓ yes → retry once with fallback model
+Step 3: Fallback model retry (if configured)
    ↓ succeeded? → done ✅
-   ↓ failed?
-Step 4: Set status to "needs_retry"
-        → Telegram notification sent
-        → User decides: Edit / Retry Now / Delete
-        → "Retry Now" re-queues instantly from Step 1
+   ↓ failed? → cleanup again
+Step 4: needs_retry + Telegram alert
+        → User decides: Retry / Edit / Delete
 ```
 
 **Settings (configurable in /settings):**
@@ -241,6 +240,29 @@ Tickets also use:
 3. User decides: Force Retry / Edit / Delete from the event details (available any time)
 4. Same behavior for tickets: stuck executions → `needs_retry` after stale lock timeout
 
+**Event fails and cleanup runs:**
+1. All retries exhausted (including fallback model if set)
+2. Worker runs 3-phase cleanup: Qdrant memories → session truncation → file deletion
+3. Agent's main session file truncated to pre-execution state (agent has no memory of the failed run)
+4. Memory entries created during the run are deleted from Qdrant
+5. Files created during the run (in allowed paths) are deleted
+6. Cleanup details logged in `agenda_run_attempts.cleanup_details`
+7. Status set to `needs_retry` → Telegram alert → user decides
+
+**Cleanup crashes mid-way (worker dies during cleanup):**
+1. `cleanup_status` was set to `'pending'` before cleanup started
+2. On worker restart, `recoverPendingCleanups()` finds pending cleanups
+3. Re-runs cleanup (all operations are idempotent — safe to repeat)
+4. Session truncation: if already truncated, file size ≤ offset → no-op
+5. Qdrant delete: deleting non-existent points is a no-op
+6. File delete: missing files are silently skipped
+
+**Same agent has two agenda events scheduled at the same time:**
+1. First job acquires per-agent execution lock
+2. Second job sees lock is held → re-queued with 30s delay (not failed)
+3. After first job completes → lock released → second job picks up
+4. No concurrent execution on the same agent, no context pollution
+
 **Two workers try to pick up the same job:**
 1. Postgres claim lock (`UPDATE ... WHERE status IN ('scheduled','queued','needs_retry')`)
 2. Only the first `UPDATE` succeeds (returns 1 row), the other gets 0 rows and skips
@@ -294,6 +316,39 @@ Tickets also use:
 2. On reconnect: full refresh of events + failed count
 3. No data loss — DB is the source of truth
 
+**Service crashes (worker, scheduler, bridge-logger):**
+1. Watchdog detects within 30s → auto-restart → service resumes
+2. In-flight jobs: occurrence stays 'running' with stale lock → after 15 min, stale recovery sets to 'needs_retry'
+3. No data loss, no auto-re-execution
+
+**OpenClaw gateway goes down during execution:**
+1. `openclaw agent` command fails → step fails → enters retry flow
+2. If gateway stays down through all retries → needs_retry
+3. Gateway coming back up doesn't affect Mission Control services — they reconnect automatically
+4. Watchdog ensures services stay alive
+
+**All services crash at once (e.g., server reboot):**
+1. `mc-services start` brings everything back
+2. Watchdog starts automatically
+3. Stale lock recovery cleans up any in-flight work
+4. Pending cleanups resume
+5. No data loss
+
+**Worker was down for hours, events piled up:**
+1. Scheduler may have created occurrences + enqueued jobs to Redis while worker was dead
+2. On restart, worker picks up all queued jobs
+3. Each job hits the execution window check (default 30 min)
+4. Jobs that are past the window → `needs_retry` immediately (NOT auto-executed)
+5. Telegram alert for each: "missed execution window"
+6. You decide: Retry (runs now) / Edit / Delete
+
+**Multiple needs_retry events, user clicks Retry on all at once:**
+1. All re-queued to Redis simultaneously with fresh timestamps
+2. Same-agent events: per-agent lock serializes them (one at a time, 30s re-queue delay)
+3. Different-agent events: run fully in parallel
+4. Each gets its own snapshot + cleanup cycle
+5. No conflicts, no data loss — they queue up and run in order
+
 **User edits an event while it's running:**
 1. Edit button shows "Edit (running)" and is disabled
 2. Tooltip explains why
@@ -307,6 +362,53 @@ Tickets also use:
 | All retries exhausted | ⚠️ Needs manual retry |
 | Auto-retry triggered | 🔄 Exceeded time limit, needs manual retry |
 | Fatal error | ❌ Event failed with error message |
+
+#### Automatic Cleanup on Failure
+
+When an agenda event fails (after all retries are exhausted), the worker automatically cleans up the side effects of the failed execution. This prevents polluted agent context, stale files, and orphaned memory entries.
+
+**3-Phase Cleanup (runs in order):**
+
+```
+Phase 1: Qdrant Memory Cleanup
+  → Read session file bytes appended during execution
+  → Parse for memory_store tool results containing returned IDs
+  → Delete those memory entries from Qdrant via REST API
+  → Idempotent: safe to re-run (deleting non-existent points is a no-op)
+
+Phase 2: Session File Truncation
+  → Truncate agent's main session file back to pre-execution byte offset
+  → JSONL is append-only, so this cleanly removes only the appended messages
+  → Only affects agent:X:main session (used by the worker)
+  → Telegram messages go to a DIFFERENT session file — never affected
+
+Phase 3: File Deletion
+  → Delete files created during the failed attempt (ctime > attempt start)
+  → Only files in allowed paths: /home/clawdbot/, /storage/, /tmp/
+  → Files are checked individually — missing files are silently skipped
+```
+
+**Per-Agent Execution Locks:**
+- Before execution, the worker acquires a per-agent lock (`agent_execution_locks` table)
+- Prevents concurrent agenda tasks from running on the same agent simultaneously
+- If lock is held: job re-queued with 30s delay (no failure, no lost work)
+- Locks auto-released after execution (success or failure, in finally block)
+- Stale locks (>20 min) are force-deleted during periodic recovery
+
+**Crash Recovery:**
+- Session snapshots and cleanup status stored in `agenda_run_attempts`
+- If worker crashes mid-cleanup (`cleanup_status = 'pending'`), recovery runs on next startup
+- All cleanup operations are idempotent — safe to re-run after crash
+- Cleanup details (deleted memories, files, errors) logged in `cleanup_details` jsonb column
+
+**What gets cleaned up:**
+| Artifact | Cleaned? | Method |
+|---|---|---|
+| Agent session messages | ✅ | Session file truncation to pre-execution byte offset |
+| Qdrant memory entries | ✅ | Delete by ID via Qdrant REST API |
+| Created files | ✅ | Delete files with ctime after attempt start |
+| Artifact copies in /storage | ❌ | Preserved for debugging (artifacts are copies, not originals) |
+| DB run attempt records | ❌ | Preserved for audit trail |
 
 #### Safety mechanisms
 - **Postgres claim locks**: prevent duplicate execution across workers
@@ -322,6 +424,23 @@ Tickets also use:
 - Notification provider polls for service status changes
 - API endpoint (`/api/services`) for service management and log access
 
+### Service Watchdog
+- `mc-services.sh` includes a background watchdog process
+- Checks all services every 30 seconds
+- Auto-restarts any crashed service (except `gateway-sync` which is one-shot)
+- Started automatically with `mc-services start`, stopped with `mc-services stop`
+- Manual start: `mc-services watch`
+- Logs: `.runtime/logs/watchdog.log`
+- If a service repeatedly crashes, watchdog keeps restarting it — check the service log for root cause
+
+### 15-Minute Scheduling Rule
+- Events can only be scheduled at 15-minute intervals (XX:00, XX:15, XX:30, XX:45)
+- **One event per time slot** — no two events can share the same 15-min slot
+- Maximum 4 events per hour
+- Enforced in both UI (time selector dropdown) and API (validation rejects non-15-min times + duplicate slots)
+- Reduces scheduling conflicts and gives each event adequate execution time
+- Recurring events follow the same rule — time is always on a 15-min boundary
+
 ### Processes
 - Card grid layout with create, edit, duplicate, delete, **simulate**
 - **Delete safety**: if a process is tied to agenda events, shows a warning listing affected events; on confirm, cancels all future occurrences and deactivates the events (past runs preserved)
@@ -329,13 +448,17 @@ Tickets also use:
 - Per-step: instruction, skill, agent, model override
 - Version tracking with labels
 - Clicking a process card opens edit with existing data pre-filled
-- **Simulation mode**: dry-run a process before saving or attaching to events
-  - Available from the Review step in the editor (for unsaved processes) and from each process card
+- **Simulation mode**: dry-run a process or agenda event before saving
+  - Available from the Review step in both the process editor and the agenda event modal
+  - Clicking "Run Simulation" opens the simulation modal and auto-starts execution
   - Runs each step live via SSE — shows step-by-step progress with loading indicators
   - Displays full agent output per step with markdown rendering
   - Detects files created during simulation (path regex across agent output)
-  - **Cleanup button**: deletes all files created during simulation with one click (only allowed paths: `/home/clawdbot/`, `/storage/`, `/tmp/`)
   - Steps run with `[SIMULATION MODE]` prefix in the instruction so agents know not to make permanent changes
+  - **Full cleanup** — the "Cleanup All" button removes every trace of the simulation:
+    1. **Files**: deletes all files created during simulation (allowed paths: `/home/clawdbot/`, `/storage/`, `/tmp/`)
+    2. **Agent chat history**: restores agent session files to their exact pre-simulation state by truncating appended simulation messages (byte-offset snapshot/restore — the agent literally has no memory of the simulation)
+  - **How cleanup works internally**: before the simulation starts, the API snapshots the byte size of each involved agent's session file (JSONL, append-only). After simulation, cleanup truncates each file back to its pre-sim byte offset, surgically removing only the simulation messages while preserving all prior conversation history
 
 ### Agents
 - Status cards with gradient accents, emoji avatars, pulse indicators
@@ -371,6 +494,7 @@ scheduled → [worker claims] → running → succeeded ✅
 running → succeeded ✅
         → failed → [auto-retry 1..N times] → succeeded ✅
                                             → [fallback model if set] → succeeded ✅
+                                                                      → [cleanup: Qdrant → session → files]
                                                                       → needs_retry → [user: retry/edit/delete]
         → [>5 min] → Telegram alert (still running, user decides)
         → [force retry] → current attempt failed → re-scheduled → running → ...
@@ -418,8 +542,8 @@ OpenClaw config is auto-discovered from `~/.openclaw/openclaw.json`. No OpenClaw
 | `/api/agenda/stats` | GET | Agenda statistics |
 | `/api/processes` | GET/POST | Process CRUD |
 | `/api/processes/[id]` | GET/PATCH/DELETE | Single process operations |
-| `/api/processes/simulate` | POST | SSE stream — simulate a process step-by-step |
-| `/api/processes/simulate/cleanup` | POST | Delete files created during simulation |
+| `/api/processes/simulate` | POST | SSE stream — simulate a process step-by-step (snapshots session state before run) |
+| `/api/processes/simulate/cleanup` | POST | Full cleanup: delete files + restore agent sessions to pre-sim state |
 | `/api/services` | GET/POST | Service health monitoring and management |
 | `/api/agents` | GET | Agent discovery (reads from DB + runtime) |
 | `/api/skills` | GET | Workspace skills list |
@@ -462,19 +586,15 @@ OpenClaw config is auto-discovered from `~/.openclaw/openclaw.json`. No OpenClaw
 | Zombie processes after Ctrl+C | `npm run dev:kill` cleans up everything |
 | Double scrollbar on agenda page | Fixed in v1.4.0 — controlled max-height on time grids |
 | Tooltips not showing | Fixed in v1.4.0 — uses Radix Tooltip instead of native title attribute |
+| Services all stopped | `mc-services start` — watchdog auto-restarts on future crashes |
+| Cleanup status stuck as 'pending' | Worker restart triggers `recoverPendingCleanups()` automatically |
+| Agent lock stuck | Stale lock recovery runs every 5 min, force-deletes locks >20 min old |
 
 ## Database
 
 Schema managed by `scripts/db-init.sh` (Docker) and `scripts/db-setup.mjs` (Node).
 
-Key tables: `workspaces`, `boards`, `columns`, `tickets`, `ticket_attachments`, `ticket_subtasks`, `ticket_comments`, `ticket_activity`, `agents`, `agent_logs`, `agenda_events`, `agenda_occurrences`, `agenda_run_attempts`, `agenda_run_steps`, `processes`, `process_versions`, `process_steps`, `worker_settings`, `service_health`.
-
-Reset everything: `npm run db:reset` or `bash scripts/clean.sh`.
-
-## License
-
-Part of the [OpenClaw](https://github.com/openclaw/openclaw) project.
-s_steps`, `worker_settings`, `service_health`.
+Key tables: `workspaces`, `boards`, `columns`, `tickets`, `ticket_attachments`, `ticket_subtasks`, `ticket_comments`, `ticket_activity`, `agents`, `agent_logs`, `agenda_events`, `agenda_occurrences`, `agenda_run_attempts`, `agenda_run_steps`, `processes`, `process_versions`, `process_steps`, `worker_settings`, `service_health`, `agent_execution_locks`.
 
 Reset everything: `npm run db:reset` or `bash scripts/clean.sh`.
 

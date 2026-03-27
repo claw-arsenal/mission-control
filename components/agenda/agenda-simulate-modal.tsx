@@ -110,6 +110,7 @@ export function AgendaSimulateModal({ open, formData, agents, processes, onClose
         open={simulateOpen}
         processName={eventName}
         steps={steps}
+        autoStart
         onClose={() => {
           setSimulateOpen(false);
           onClose();

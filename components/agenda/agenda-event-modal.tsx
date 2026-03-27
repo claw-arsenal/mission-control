@@ -162,6 +162,23 @@ const WEEKDAYS = [
   { value: "0", label: "Sun" },
 ];
 
+/** Generate all 96 time options at 15-minute intervals (00:00 … 23:45) */
+const TIME_OPTIONS: { value: string; label: string }[] = (() => {
+  const opts: { value: string; label: string }[] = [];
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      const val = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      opts.push({ value: val, label: val });
+    }
+  }
+  return opts;
+})();
+
+/** Snap a minute value to the nearest 15-minute mark */
+function snapTo15(minutes: number): number {
+  return Math.round(minutes / 15) * 15;
+}
+
 function getCurrentTimeInTz(tz: string): string {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -170,9 +187,13 @@ function getCurrentTimeInTz(tz: string): string {
       minute: "2-digit",
       hour12: false,
     }).formatToParts(new Date());
-    const h = parts.find((p) => p.type === "hour")?.value ?? "10";
-    const m = parts.find((p) => p.type === "minute")?.value ?? "00";
-    return `${h}:${m}`;
+    const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "10", 10);
+    const rawM = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+    const snapped = snapTo15(rawM);
+    // Handle overflow (e.g. 23:53 → snaps to 60 → next hour)
+    const finalH = snapped >= 60 ? (h + 1) % 24 : h;
+    const finalM = snapped >= 60 ? 0 : snapped;
+    return `${String(finalH).padStart(2, "0")}:${String(finalM).padStart(2, "0")}`;
   } catch {
     return "10:00";
   }
@@ -335,7 +356,6 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
   const [form, setForm] = useState<AgendaEventFormData>(initialData ? buildInitialForm(initialData) : defaultForm);
   const [error, setError] = useState("");
   const [step, setStep] = useState(0);
-  const [simulateOpen, setSimulateOpen] = useState(false);
 
   const initialDataRef = useRef(initialData);
   useEffect(() => {
@@ -713,16 +733,19 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="ae-ot-time" className="text-xs font-semibold text-foreground/80">
+              <Label className="text-xs font-semibold text-foreground/80">
                 Time
               </Label>
-              <Input
-                id="ae-ot-time"
-                type="time"
-                value={form.startTime}
-                onChange={(e) => updateField("startTime", e.target.value)}
-                className="h-10"
-              />
+              <Select value={form.startTime} onValueChange={(v) => updateField("startTime", v)}>
+                <SelectTrigger className="h-10 w-full cursor-pointer">
+                  <SelectValue placeholder="Select time" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[280px]">
+                  {TIME_OPTIONS.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </>
@@ -751,16 +774,19 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="ae-rep-time" className="text-xs font-semibold text-foreground/80">
+              <Label className="text-xs font-semibold text-foreground/80">
                 Time
               </Label>
-              <Input
-                id="ae-rep-time"
-                type="time"
-                value={form.startTime}
-                onChange={(e) => updateField("startTime", e.target.value)}
-                className="h-10"
-              />
+              <Select value={form.startTime} onValueChange={(v) => updateField("startTime", v)}>
+                <SelectTrigger className="h-10 w-full cursor-pointer">
+                  <SelectValue placeholder="Select time" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[280px]">
+                  {TIME_OPTIONS.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -917,11 +943,11 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           {(form.freePrompt || form.processVersionIds.length > 0) && (
             <div className="p-3">
               <AgendaSimulateModal
-                open={simulateOpen}
+                open={true}
                 formData={form}
                 agents={agents}
                 processes={processes}
-                onClose={() => setSimulateOpen(false)}
+                onClose={() => {}}
               />
             </div>
           )}
