@@ -130,22 +130,26 @@ export function useProcesses() {
   };
 
   const updateProcess = async (id: string, data: ProcessFormData) => {
-    const json = await apiFetch(`/api/processes/${id}`, {
-      name: data.name,
-      description: data.description,
-      versionLabel: data.versionLabel,
-      steps: data.steps.map((s, i) => ({
-        title: s.title,
-        instruction: s.instruction,
-        skillKey: s.skillKey || null,
-        agentId: s.agentId || null,
-        timeoutSeconds: s.timeoutSeconds || null,
-        modelOverride: s.modelOverride || null,
-        stepOrder: i,
-      })),
-      status: data.status,
-      action: undefined,
+    const res = await fetch(`/api/processes/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: data.name,
+        description: data.description,
+        versionLabel: data.versionLabel,
+        steps: data.steps.map((s, i) => ({
+          title: s.title,
+          instruction: s.instruction,
+          skillKey: s.skillKey || null,
+          agentId: s.agentId || null,
+          timeoutSeconds: s.timeoutSeconds || null,
+          modelOverride: s.modelOverride || null,
+          stepOrder: i,
+        })),
+        status: data.status,
+      }),
     });
+    const json = await res.json();
     if (json.ok) {
       await loadProcesses();
       toast.success("Process updated");

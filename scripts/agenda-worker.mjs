@@ -49,12 +49,43 @@ async function writeHeartbeat(status = "running", lastError = null) {
   }
 }
 
+// ── Telegram chat ID discovery (same as task-worker) ──────────────────────────
+const OPENCLAW_HOME = process.env.OPENCLAW_HOME || resolve(process.env.HOME || "/home/clawdbot", ".openclaw");
+
+let _cachedChatId = null;
+async function getTelegramChatId(agentId = "main") {
+  if (_cachedChatId) return _cachedChatId;
+  const searchPaths = [
+    resolve(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`),
+    resolve(OPENCLAW_HOME, "agents/main/sessions/sessions.json"),
+  ];
+  for (const sessionsPath of searchPaths) {
+    try {
+      const raw = await readFile(sessionsPath, "utf8");
+      const data = JSON.parse(raw);
+      for (const [, val] of Object.entries(data)) {
+        if (val?.deliveryContext?.channel === "telegram" && val?.deliveryContext?.to) {
+          _cachedChatId = String(val.deliveryContext.to).replace(/^telegram:/, "");
+          return _cachedChatId;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
 // ── Telegram notification helper ──────────────────────────────────────────────
-async function sendTelegramNotification(message) {
+async function sendTelegramNotification(message, agentId = "main") {
   try {
+    const chatId = await getTelegramChatId(agentId);
+    if (!chatId) {
+      console.warn("[agenda-worker] No Telegram chat ID found — notification skipped");
+      return;
+    }
     await execFileAsync("openclaw", [
       "message", "send",
       "--channel", "telegram",
+      "--target", chatId,
       "--message", message,
       "--json",
     ], { timeout: 30000, env: process.env });
@@ -73,7 +104,9 @@ const agendaWorker = new Worker(
     // ── Execution window check ────────────────────────────────────────────────
     const scheduledTime = new Date(scheduledFor || job.timestamp);
     const windowMinutes = executionWindowMinutes || 30;
-    const diffMinutes = (Date.now() - scheduledTime.getTime()) / 60000;
+    // Use DB server time to avoid clock skew between scheduler and worker
+    const [{ now: dbNow }] = await sql`SELECT now() as now`;
+    const diffMinutes = (new Date(dbNow).getTime() - scheduledTime.getTime()) / 60000;
     if (diffMinutes > windowMinutes) {
       // Mark as needs_retry (not expired) — user can press Retry to run it now
       await sql`UPDATE agenda_occurrences SET status = 'needs_retry' WHERE id = ${occurrenceId}`;
@@ -85,7 +118,7 @@ const agendaWorker = new Worker(
       `;
       await sql`UPDATE agenda_occurrences SET latest_attempt_no = ${missedAttemptNo} WHERE id = ${occurrenceId}`;
       console.warn(`[agenda-worker] Occurrence ${occurrenceId} needs retry (${diffMinutes.toFixed(1)}m past window of ${windowMinutes}m)`);
-      await sendTelegramNotification(`⚠️ Agenda event "${title}" missed execution window (${Math.round(diffMinutes)}m late) — needs manual retry in Mission Control`);
+      await sendTelegramNotification(`⚠️ Agenda event "${title}" missed execution window (${Math.round(diffMinutes)}m late) — needs manual retry in Mission Control`, agentId || "main");
       return { skipped: true, reason: 'missed_window' };
     }
 
@@ -114,187 +147,117 @@ const agendaWorker = new Worker(
     let overallSuccess = true;
     const stepSummaries = [];
 
-    // ── Long-running failsafe: alert after 5 minutes ────────────────────────
-    let longRunAlerted = false;
-    const longRunTimer = setTimeout(async () => {
-      longRunAlerted = true;
-      const elapsed = "5+ minutes";
+    // ── Load settings ──────────────────────────────────────────────────────
+    const [settingsRow] = await sql`SELECT auto_retry_after_minutes, max_retries, default_fallback_model FROM worker_settings WHERE id = 1 LIMIT 1`;
+    const autoRetryMinutes = Number(settingsRow?.auto_retry_after_minutes || 0);
+    const maxRetries = Number(settingsRow?.max_retries ?? 1); // default 1 auto-retry
+    const globalFallbackModel = settingsRow?.default_fallback_model || "";
+    const effectiveFallbackModel = fallbackModel || globalFallbackModel || null;
+
+    // Always alert after 5 minutes
+    const alertTimer = setTimeout(async () => {
       const msg = `⏱️ Long-running agenda event alert\n\n` +
         `Event: "${title}"\n` +
         `Occurrence: ${occurrenceId}\n` +
         `Attempt: #${attemptNo}\n` +
-        `Running for: ${elapsed}\n` +
-        `Started: ${attempt.started_at}\n\n` +
-        `This event is taking longer than expected. Check Mission Control for details or use Force Retry to restart it.`;
-      await sendTelegramNotification(msg);
+        `Running for: 5+ minutes\n` +
+        `Started: ${attempt.started_at}\n` +
+        (autoRetryMinutes > 0 ? `Auto-retry configured at ${autoRetryMinutes} min.\n` : `Auto-retry: disabled (manual only)\n`) +
+        `\nCheck Mission Control for details or use Force Retry to restart it.`;
+      await sendTelegramNotification(msg, agentId || "main");
       console.warn(`[agenda-worker] Long-running alert sent for "${title}" (occurrence ${occurrenceId})`);
-    }, 5 * 60 * 1000); // 5 minutes
+    }, 5 * 60 * 1000);
 
-    try {
-      // ── 1. Execute free prompt ─────────────────────────────────────────────
-      if (freePrompt) {
-        const stepResult = await runAgentStep({
-          runAttemptId,
-          processVersionId: null,
-          processStepId: null,
-          stepOrder: 0,
-          agentId: agentId || "main",
-          skillKey: null,
-          instruction: freePrompt,
-          timeoutSeconds: null,
-          fallbackModel: fallbackModel || null,
-          sql,
-        });
-
-        stepSummaries.push({
-          type: "free_prompt",
-          success: stepResult.success,
-          summary: stepResult.output.slice(0, 200),
-        });
-
-        if (!stepResult.success) {
-          overallSuccess = false;
+    // Auto-retry timer (if event is stuck longer than configured minutes)
+    let autoRetryTimer = null;
+    if (autoRetryMinutes > 0) {
+      autoRetryTimer = setTimeout(async () => {
+        console.warn(`[agenda-worker] Auto-retry triggered for "${title}" after ${autoRetryMinutes}min (occurrence ${occurrenceId})`);
+        try {
+          await sql`UPDATE agenda_run_attempts SET status = 'failed', finished_at = now(), error_message = ${`Auto-retried: exceeded ${autoRetryMinutes} minute limit`} WHERE id = ${runAttemptId} AND status = 'running'`;
+          const [maxAtt] = await sql`SELECT coalesce(max(attempt_no), 0) as max_no FROM agenda_run_attempts WHERE occurrence_id = ${occurrenceId}`;
+          await sql`UPDATE agenda_occurrences SET status = 'needs_retry', locked_at = null, latest_attempt_no = ${maxAtt.max_no} WHERE id = ${occurrenceId}`;
+          await sql`SELECT pg_notify('agenda_change', ${JSON.stringify({ action: "auto_retry", occurrenceId })})`;
+          await sendTelegramNotification(
+            `🔄 Auto-retry triggered for "${title}"\n\n` +
+            `Exceeded ${autoRetryMinutes} minute time limit.\n` +
+            `Status set to needs_retry — check Mission Control to retry or investigate.`,
+            agentId || "main"
+          );
+        } catch (err) {
+          console.error(`[agenda-worker] Auto-retry failed for ${occurrenceId}:`, err);
         }
+      }, autoRetryMinutes * 60 * 1000);
+    }
+
+    // ── Helper: run all steps (free prompt + processes) ──────────────────────
+    const sorted = [...(processes ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+    async function runAllSteps(overrideModel = null) {
+      const results = [];
+      let success = true;
+      let ctx = "";
+
+      // Free prompt
+      if (freePrompt) {
+        const r = await runAgentStep({
+          runAttemptId, processVersionId: null, processStepId: null, stepOrder: 0,
+          agentId: agentId || "main", skillKey: null, instruction: freePrompt,
+          timeoutSeconds: null, fallbackModel: overrideModel ? null : (effectiveFallbackModel || null),
+          overrideModel, sql,
+        });
+        results.push({ type: "free_prompt", success: r.success, summary: r.output.slice(0, 200) });
+        if (!r.success) { success = false; return { success, results }; }
+        ctx = `Previous output (free prompt):\n${r.output.slice(0, 500)}\n\n`;
       }
 
-      // ── 2. Execute attached processes sequentially (with cumulative context) ──
-      const sorted = [...(processes ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-
-      // Build cumulative context so each step can reference previous outputs
-      let cumulativeContext = "";
-      if (freePrompt && stepSummaries.length > 0 && stepSummaries[0].success) {
-        cumulativeContext = `Previous output (free prompt):\n${stepSummaries[0].summary || ""}\n\n`;
-      }
-
+      // Process steps
       for (const proc of sorted) {
         const pvId = proc.process_version_id;
-
-        const stepRows = await sql`
-          select ps.*
-          from process_steps ps
-          where ps.process_version_id = ${pvId}
-          order by ps.step_order asc
-        `;
-
+        const stepRows = await sql`select ps.* from process_steps ps where ps.process_version_id = ${pvId} order by ps.step_order asc`;
         for (const stepRow of stepRows) {
-          // Prepend cumulative context so step can reference previous outputs
-          const contextualInstruction = cumulativeContext
-            ? `Context from previous steps:\n${cumulativeContext}---\nCurrent step instruction:\n${stepRow.instruction}`
+          const instruction = ctx
+            ? `Context from previous steps:\n${ctx}---\nCurrent step instruction:\n${stepRow.instruction}`
             : stepRow.instruction;
-
-          const stepResult = await runAgentStep({
-            runAttemptId,
-            processVersionId: pvId,
-            processStepId: stepRow.id,
-            stepOrder: stepRow.step_order,
-            agentId: stepRow.agent_id || agentId || "main",
-            skillKey: stepRow.skill_key,
-            instruction: contextualInstruction,
-            timeoutSeconds: stepRow.timeout_seconds,
-            fallbackModel: stepRow.fallback_model || fallbackModel || null,
-            sql,
+          const r = await runAgentStep({
+            runAttemptId, processVersionId: pvId, processStepId: stepRow.id, stepOrder: stepRow.step_order,
+            agentId: stepRow.agent_id || agentId || "main", skillKey: stepRow.skill_key,
+            instruction, timeoutSeconds: stepRow.timeout_seconds,
+            fallbackModel: overrideModel ? null : (stepRow.fallback_model || effectiveFallbackModel || null),
+            overrideModel, sql,
           });
-
-          stepSummaries.push({
-            type: "process_step",
-            processVersionId: pvId,
-            stepId: stepRow.id,
-            stepTitle: stepRow.title,
-            success: stepResult.success,
-            summary: stepResult.output.slice(0, 200),
-            error: stepResult.error,
-          });
-
-          // Accumulate context for next step
-          cumulativeContext += `Previous output (${stepRow.title || 'Step ' + stepRow.step_order}):\n${stepResult.output.slice(0, 500)}\n\n`;
-
-          if (!stepResult.success) {
-            overallSuccess = false;
-          }
+          results.push({ type: "process_step", processVersionId: pvId, stepId: stepRow.id, stepTitle: stepRow.title, success: r.success, summary: r.output.slice(0, 200), error: r.error });
+          ctx += `Previous output (${stepRow.title || 'Step ' + stepRow.step_order}):\n${r.output.slice(0, 500)}\n\n`;
+          if (!r.success) { success = false; return { success, results }; }
         }
       }
+      return { success, results };
+    }
 
-      // ── Inline retry logic (no backoff) ──────────────────────────────────
-      if (!overallSuccess) {
-        // Instant retry — re-run all steps
-        console.log(`[agenda-worker] First attempt failed for ${occurrenceId}, instant retry...`);
-        overallSuccess = true;
+    try {
+      // ── 1. First attempt ──────────────────────────────────────────────────
+      let run = await runAllSteps();
+      overallSuccess = run.success;
+      stepSummaries.push(...run.results);
+
+      // ── 2. Auto-retries (default 1, configurable via settings) ────────────
+      let retryCount = 0;
+      while (!overallSuccess && retryCount < maxRetries) {
+        retryCount++;
+        console.log(`[agenda-worker] Auto-retry ${retryCount}/${maxRetries} for ${occurrenceId}...`);
         stepSummaries.length = 0;
-        cumulativeContext = "";
-
-        // Re-run free prompt
-        if (freePrompt) {
-          const stepResult = await runAgentStep({
-            runAttemptId, processVersionId: null, processStepId: null, stepOrder: 0,
-            agentId: agentId || "main", skillKey: null, instruction: freePrompt,
-            timeoutSeconds: null, fallbackModel: fallbackModel || null, sql,
-          });
-          stepSummaries.push({ type: "free_prompt", success: stepResult.success, summary: stepResult.output.slice(0, 200) });
-          if (!stepResult.success) overallSuccess = false;
-          else cumulativeContext = `Previous output (free prompt):\n${stepResult.output.slice(0, 500)}\n\n`;
-        }
-        // Re-run attached processes
-        if (overallSuccess || !freePrompt) {
-          for (const proc of sorted) {
-            const pvId = proc.process_version_id;
-            const stepRows = await sql`select ps.* from process_steps ps where ps.process_version_id = ${pvId} order by ps.step_order asc`;
-            for (const stepRow of stepRows) {
-              const contextualInstruction = cumulativeContext
-                ? `Context from previous steps:\n${cumulativeContext}---\nCurrent step instruction:\n${stepRow.instruction}`
-                : stepRow.instruction;
-              const stepResult = await runAgentStep({
-                runAttemptId, processVersionId: pvId, processStepId: stepRow.id, stepOrder: stepRow.step_order,
-                agentId: stepRow.agent_id || agentId || "main", skillKey: stepRow.skill_key,
-                instruction: contextualInstruction, timeoutSeconds: stepRow.timeout_seconds,
-                fallbackModel: stepRow.fallback_model || fallbackModel || null, sql,
-              });
-              stepSummaries.push({ type: "process_step", processVersionId: pvId, stepId: stepRow.id, stepTitle: stepRow.title, success: stepResult.success, summary: stepResult.output.slice(0, 200), error: stepResult.error });
-              cumulativeContext += `Previous output (${stepRow.title || 'Step ' + stepRow.step_order}):\n${stepResult.output.slice(0, 500)}\n\n`;
-              if (!stepResult.success) { overallSuccess = false; break; }
-            }
-            if (!overallSuccess) break;
-          }
-        }
+        run = await runAllSteps();
+        overallSuccess = run.success;
+        stepSummaries.push(...run.results);
       }
 
-      // Fallback model retry if still failing and fallbackModel is set
-      if (!overallSuccess && fallbackModel) {
-        console.log(`[agenda-worker] Retry failed for ${occurrenceId}, trying fallback model: ${fallbackModel}`);
-        overallSuccess = true;
+      // ── 3. Fallback model retry (if all auto-retries failed + fallback set) ──
+      if (!overallSuccess && effectiveFallbackModel) {
+        console.log(`[agenda-worker] All retries failed for ${occurrenceId}, trying fallback model: ${effectiveFallbackModel}`);
         stepSummaries.length = 0;
-        cumulativeContext = "";
-
-        if (freePrompt) {
-          const stepResult = await runAgentStep({
-            runAttemptId, processVersionId: null, processStepId: null, stepOrder: 0,
-            agentId: agentId || "main", skillKey: null, instruction: freePrompt,
-            timeoutSeconds: null, fallbackModel: null, overrideModel: fallbackModel, sql,
-          });
-          stepSummaries.push({ type: "free_prompt", success: stepResult.success, summary: stepResult.output.slice(0, 200) });
-          if (!stepResult.success) overallSuccess = false;
-          else cumulativeContext = `Previous output (free prompt):\n${stepResult.output.slice(0, 500)}\n\n`;
-        }
-        if (overallSuccess || !freePrompt) {
-          for (const proc of sorted) {
-            const pvId = proc.process_version_id;
-            const stepRows = await sql`select ps.* from process_steps ps where ps.process_version_id = ${pvId} order by ps.step_order asc`;
-            for (const stepRow of stepRows) {
-              const contextualInstruction = cumulativeContext
-                ? `Context from previous steps:\n${cumulativeContext}---\nCurrent step instruction:\n${stepRow.instruction}`
-                : stepRow.instruction;
-              const stepResult = await runAgentStep({
-                runAttemptId, processVersionId: pvId, processStepId: stepRow.id, stepOrder: stepRow.step_order,
-                agentId: stepRow.agent_id || agentId || "main", skillKey: stepRow.skill_key,
-                instruction: contextualInstruction, timeoutSeconds: stepRow.timeout_seconds,
-                fallbackModel: null, overrideModel: stepRow.fallback_model || fallbackModel, sql,
-              });
-              stepSummaries.push({ type: "process_step", processVersionId: pvId, stepId: stepRow.id, stepTitle: stepRow.title, success: stepResult.success, summary: stepResult.output.slice(0, 200), error: stepResult.error });
-              cumulativeContext += `Previous output (${stepRow.title || 'Step ' + stepRow.step_order}):\n${stepResult.output.slice(0, 500)}\n\n`;
-              if (!stepResult.success) { overallSuccess = false; break; }
-            }
-            if (!overallSuccess) break;
-          }
-        }
+        run = await runAllSteps(effectiveFallbackModel);
+        overallSuccess = run.success;
+        stepSummaries.push(...run.results);
       }
 
       // ── Finalize after retries ──────────────────────────────────────────────
@@ -331,13 +294,15 @@ const agendaWorker = new Worker(
         `;
         await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "needs_retry", occurrenceId })})`;
         console.warn(`[agenda-worker] Occurrence ${occurrenceId} needs manual retry (all retries exhausted)`);
-        await sendTelegramNotification(`⚠️ Agenda event "${title}" needs manual retry (all retries exhausted)`);
+        await sendTelegramNotification(`⚠️ Agenda event "${title}" needs manual retry (all retries exhausted)`, agentId || "main");
       }
 
-      clearTimeout(longRunTimer);
+      clearTimeout(alertTimer);
+      if (autoRetryTimer) clearTimeout(autoRetryTimer);
       return { success: overallSuccess, summary: summaryText };
     } catch (error) {
-      clearTimeout(longRunTimer);
+      clearTimeout(alertTimer);
+      if (autoRetryTimer) clearTimeout(autoRetryTimer);
       const msg = error instanceof Error ? error.message : String(error);
       await sql`
         update agenda_run_attempts
@@ -352,7 +317,7 @@ const agendaWorker = new Worker(
         where id = ${occurrenceId}
       `;
       await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "failed", occurrenceId })})`;
-      await sendTelegramNotification(`❌ Agenda event "${title}" failed: ${msg.slice(0, 200)}`);
+      await sendTelegramNotification(`❌ Agenda event "${title}" failed: ${msg.slice(0, 200)}`, agentId || "main");
 
       console.error(`[agenda-worker] Fatal error on ${occurrenceId}:`, msg);
       throw error;
@@ -430,15 +395,8 @@ async function runAgentStep({
       raw = result.stdout;
     } catch (primaryErr) {
       const primaryMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-      // If rate limit error and fallback model available, retry with fallback
-      if (fallbackModel && isRateLimitError(primaryMsg)) {
-        console.log(`[agenda-worker] Rate limit hit, retrying with fallback model: ${fallbackModel}`);
-        usedFallback = true;
-        const result = await executeAgent(fallbackModel);
-        raw = result.stdout;
-      } else {
-        throw primaryErr;
-      }
+      // Rate limit errors → fail immediately, let user decide (don't auto-retry with fallback here)
+      throw primaryErr;
     }
 
     const parsed = JSON.parse(raw);
@@ -579,13 +537,28 @@ async function recoverStaleLocks() {
   try {
     const stale = await sql`
       update agenda_occurrences
-      set status = 'scheduled', locked_at = null
+      set status = 'needs_retry', locked_at = null
       where status = 'running'
         and locked_at < now() - interval '15 minutes'
       returning id
     `;
     if (stale.length > 0) {
-      console.log(`[agenda-worker] Recovered ${stale.length} stale lock(s)`);
+      console.log(`[agenda-worker] Recovered ${stale.length} stale lock(s) → needs_retry`);
+      for (const row of stale) {
+        await sql`select pg_notify('agenda_change', ${JSON.stringify({ action: "stale_recovery", occurrenceId: row.id })})`;
+      }
+      // Alert user
+      const titles = await sql`
+        select ae.title, ao.id as occ_id from agenda_occurrences ao
+        join agenda_events ae on ae.id = ao.agenda_event_id
+        where ao.id = ANY(${stale.map(r => r.id)})
+      `;
+      for (const t of titles) {
+        await sendTelegramNotification(
+          `⚠️ Stale event recovered: "${t.title}"\n\nWorker crashed during execution. Status set to needs_retry.\nRetry manually in Mission Control.`,
+          "main"
+        );
+      }
     }
   } catch (err) {
     console.warn("[agenda-worker] Stale lock recovery failed:", err.message);

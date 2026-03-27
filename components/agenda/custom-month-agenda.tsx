@@ -27,6 +27,7 @@ import {
   IconChevronRight,
 } from "@tabler/icons-react";
 import type { AgendaEventSummary } from "@/components/agenda/agenda-details-sheet";
+import { useNow, formatDuration, LiveDuration } from "@/hooks/use-now";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ export type CalendarEvent = {
   color?: EventColor;
   isRecurring?: boolean;
   status?: "draft" | "active";
-  latestResult?: "scheduled" | "running" | "succeeded" | "failed" | null;
+  latestResult?: "scheduled" | "running" | "succeeded" | "failed" | "needs_retry" | "queued" | "expired" | null;
   runStartedAt?: string | null;
   runFinishedAt?: string | null;
   timezone?: string;
@@ -57,20 +58,6 @@ export type AgendaCalendarEvent = {
   backgroundColor?: string;
   extendedProps?: Record<string, unknown>;
 };
-
-// ── Hook: track current time for "now" indicator ─────────────────────────────
-
-function useNow(intervalMs = 60_000): Date {
-  const [now, setNow] = useState(() => new Date());
-  const startedRef = useRef(false);
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    const timer = setInterval(() => setNow(new Date()), intervalMs);
-    return () => { clearInterval(timer); startedRef.current = false; };
-  }, [intervalMs]);
-  return now;
-}
 
 // ── Current time indicator line ──────────────────────────────────────────────
 
@@ -110,26 +97,11 @@ function getTimezoneAbbr(timezone: string | undefined): string {
   }
 }
 
-function formatDuration(startedAt: string | null | undefined, finishedAt: string | null | undefined): string | null {
-  if (!startedAt) return null;
-  const start = new Date(startedAt).getTime();
-  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
-  const diffMs = end - start;
-  if (diffMs < 0) return null;
-  const secs = Math.floor(diffMs / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = secs % 60;
-  if (mins < 60) return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
-}
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MAX_VISIBLE = 4;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const HOUR_HEIGHT = 64; // px per hour slot in week/day views
+const HOUR_HEIGHT = 72; // px per hour slot in week/day views
 
 // ── Color palette — matches JSONC AgendaEventItem spec ──────────────────────────
 
@@ -186,10 +158,13 @@ function resolveEventColor(event: CalendarEvent) {
 // ── Occurrence status indicator ─────────────────────────────────────────────────
 
 const RESULT_INDICATOR: Record<string, { emoji: string; color: string; pulse?: boolean }> = {
-  running:   { emoji: "", color: "bg-amber-500", pulse: true },
-  scheduled: { emoji: "", color: "bg-blue-400" },
-  succeeded: { emoji: "", color: "bg-emerald-500" },
-  failed:    { emoji: "", color: "bg-red-500" },
+  running:      { emoji: "", color: "bg-amber-500", pulse: true },
+  scheduled:    { emoji: "", color: "bg-blue-400" },
+  queued:       { emoji: "", color: "bg-blue-400" },
+  succeeded:    { emoji: "", color: "bg-emerald-500" },
+  failed:       { emoji: "", color: "bg-red-500" },
+  needs_retry:  { emoji: "", color: "bg-red-500" },
+  expired:      { emoji: "", color: "bg-gray-400" },
 };
 
 function OccurrenceStatusDot({ result, size = 6 }: { result: CalendarEvent["latestResult"]; size?: number }) {
@@ -296,22 +271,24 @@ function EventPill({ event }: { event: CalendarEvent }) {
             {timeStr}
           </span>
         )}
-        {event.latestResult && event.latestResult !== "scheduled" && (
+        {event.latestResult && event.latestResult !== "scheduled" && event.latestResult !== "queued" && (
           <span
             className="text-[8px] font-bold uppercase tracking-wider leading-none"
             style={{
               color: event.latestResult === "succeeded" ? "#16a34a"
                 : event.latestResult === "running" ? "#d97706"
-                : event.latestResult === "failed" ? "#dc2626"
+                : (event.latestResult === "failed" || event.latestResult === "needs_retry") ? "#dc2626"
+                : event.latestResult === "expired" ? "#6b7280"
                 : undefined,
               opacity: 0.85,
             }}
           >
-            {event.latestResult === "running" ? "● Running" : event.latestResult === "succeeded" ? "✓ Done" : "✗ Failed"}
-            {(() => {
-              const dur = formatDuration(event.runStartedAt, event.runFinishedAt);
-              return dur ? ` · ${dur}` : "";
-            })()}
+            {event.latestResult === "running" ? "● Running"
+              : event.latestResult === "succeeded" ? "✓ Done"
+              : event.latestResult === "needs_retry" ? "⚠ Retry"
+              : event.latestResult === "expired" ? "Expired"
+              : "✗ Failed"}
+            <LiveDuration startedAt={event.runStartedAt} finishedAt={event.runFinishedAt} prefix=" · " />
           </span>
         )}
       </div>
@@ -339,7 +316,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
 
   return (
     <div
-      className="flex flex-col gap-1 px-[10px] py-[8px] rounded-lg overflow-hidden w-full min-h-[56px] transition-all duration-150 hover:shadow-lg hover:brightness-95"
+      className="flex flex-col gap-0.5 px-[10px] py-[6px] rounded-lg overflow-visible w-full min-h-[56px] transition-all duration-150 hover:shadow-lg hover:brightness-95"
       style={{
         backgroundColor: bg,
         borderLeft: `4px solid ${dotColor}`,
@@ -359,7 +336,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
       </div>
 
       {/* Time + recurring + status label */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
         {timeStr && (
           <span
             className="text-[11px] font-semibold leading-none"
@@ -369,22 +346,24 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
           </span>
         )}
         {event.isRecurring && <RecurringIcon size={10} />}
-        {event.latestResult && event.latestResult !== "scheduled" && (
+        {event.latestResult && event.latestResult !== "scheduled" && event.latestResult !== "queued" && (
           <span
             className="text-[9px] font-bold uppercase tracking-wider leading-none"
             style={{
               color: event.latestResult === "succeeded" ? "#16a34a"
                 : event.latestResult === "running" ? "#d97706"
-                : event.latestResult === "failed" ? "#dc2626"
+                : (event.latestResult === "failed" || event.latestResult === "needs_retry") ? "#dc2626"
+                : event.latestResult === "expired" ? "#6b7280"
                 : undefined,
               opacity: 0.8,
             }}
           >
-            {event.latestResult === "running" ? "● Running" : event.latestResult === "succeeded" ? "✓ Done" : "✗ Failed"}
-            {(() => {
-              const dur = formatDuration(event.runStartedAt, event.runFinishedAt);
-              return dur ? ` · ${dur}` : "";
-            })()}
+            {event.latestResult === "running" ? "● Running"
+              : event.latestResult === "succeeded" ? "✓ Done"
+              : event.latestResult === "needs_retry" ? "⚠ Retry"
+              : event.latestResult === "expired" ? "Expired"
+              : "✗ Failed"}
+            <LiveDuration startedAt={event.runStartedAt} finishedAt={event.runFinishedAt} prefix=" · " />
           </span>
         )}
       </div>
@@ -550,21 +529,28 @@ function DayCell({
                               Draft
                             </span>
                           )}
-                          {evt.latestResult && evt.latestResult !== "scheduled" && (
+                          {evt.latestResult && evt.latestResult !== "scheduled" && evt.latestResult !== "queued" && (
                             <span
                               className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                               style={{
                                 color: evt.latestResult === "succeeded" ? "#16a34a"
                                   : evt.latestResult === "running" ? "#d97706"
-                                  : evt.latestResult === "failed" ? "#dc2626"
+                                  : (evt.latestResult === "failed" || evt.latestResult === "needs_retry") ? "#dc2626"
+                                  : evt.latestResult === "expired" ? "#6b7280"
                                   : undefined,
                                 backgroundColor: evt.latestResult === "succeeded" ? "rgba(22,163,74,0.1)"
                                   : evt.latestResult === "running" ? "rgba(217,119,6,0.1)"
-                                  : evt.latestResult === "failed" ? "rgba(220,38,38,0.1)"
+                                  : (evt.latestResult === "failed" || evt.latestResult === "needs_retry") ? "rgba(220,38,38,0.1)"
+                                  : evt.latestResult === "expired" ? "rgba(107,114,128,0.1)"
                                   : undefined,
                               }}
                             >
-                              {evt.latestResult === "running" ? "● Running" : evt.latestResult === "succeeded" ? "✓ Done" : "✗ Failed"}
+                              {evt.latestResult === "running" ? "● Running"
+                                : evt.latestResult === "succeeded" ? "✓ Done"
+                                : evt.latestResult === "needs_retry" ? "⚠ Retry"
+                                : evt.latestResult === "expired" ? "Expired"
+                                : "✗ Failed"}
+                              <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix=" · " />
                             </span>
                           )}
                         </div>
@@ -687,7 +673,7 @@ function WeekView({
               .sort((a, b) => a.topMin - b.topMin);
 
             // Full-width layout — push events down so they never overlap visually
-            const EVENT_BLOCK_HEIGHT = 52; // min height of TimeGridEventBlock + gap
+            const EVENT_BLOCK_HEIGHT = 60; // min height of TimeGridEventBlock + gap
             const layout: { evt: CalendarEvent; topPx: number }[] = [];
             let nextFreeY = 0; // track the bottom edge of the last placed event
             for (let i = 0; i < positioned.length; i++) {

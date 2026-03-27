@@ -217,15 +217,16 @@ async function markNeedsRetry(ticketId, ticket) {
   await sendTelegramMessage(ticket, `⚠️ Ticket "${ticket.title}" needs manual retry (all retries exhausted)`, chatId);
 }
 async function executeTicket(ticket, boardId, wid) { const ticketId=ticket.id; let agentId=ticket.assigned_agent_id; const agentRows = await sql`select id from agents where workspace_id = ${wid} and openclaw_agent_id = ${agentId} limit 1`; if (agentRows.length===0) agentId='main'; const chatIdForDelivery = ticket.telegram_chat_id ?? await getRecentChatId(wid, agentId);
-  // Execution window check
+  // Execution window check (use DB time to avoid clock skew)
   const scheduledFor = ticket.scheduled_for ? new Date(ticket.scheduled_for) : null;
   const windowMinutes = ticket.execution_window_minutes || 60;
   if (scheduledFor) {
-    const diffMinutes = (Date.now() - scheduledFor.getTime()) / 60000;
+    const [{ now: dbNow }] = await sql`SELECT now() as now`;
+    const diffMinutes = (new Date(dbNow).getTime() - scheduledFor.getTime()) / 60000;
     if (diffMinutes > windowMinutes) {
-      await sql`UPDATE tickets SET execution_state = 'expired', updated_at = now() WHERE id = ${ticketId}::uuid`;
-      await writeActivity(ticketId, "Expired", `Missed execution window (${windowMinutes}min)`, "warning");
-      await sendTelegramMessage(ticket, `⏰ Ticket "${ticket.title}" expired — missed ${windowMinutes}min execution window`, chatIdForDelivery);
+      await sql`UPDATE tickets SET execution_state = 'needs_retry', updated_at = now() WHERE id = ${ticketId}::uuid`;
+      await writeActivity(ticketId, "Missed window", `Missed execution window (${windowMinutes}min) — needs manual retry`, "warning");
+      await sendTelegramMessage(ticket, `⏰ Ticket "${ticket.title}" missed ${windowMinutes}min execution window — retry manually in Mission Control`, chatIdForDelivery);
       return;
     }
   }
@@ -252,11 +253,14 @@ for (const r of processRows) {
   g.steps.push(r);
 }
 const prompt = buildTicketPrompt(ticket, subtaskRows, commentRows, grouped, 'Execute the above ticket. Report progress via activity tools and mark completion when done.'); const args = ["agent", "--agent", agentId, "--message", prompt, "--json"]; let result; try { const { stdout } = await execFileAsync("openclaw", args, { timeout: 10 * 60 * 1000, env: process.env }); const parsed = JSON.parse(stdout); const inner = parsed?.result ?? parsed; const rawPayloads = Array.isArray(inner?.payloads) ? inner.payloads : []; result = { success: true, result: parsed, _rawPayloads: rawPayloads }; } catch (error) { result = { success: false, error: error.message }; }
-  // ── Inline retry logic (no backoff) ──────────────────────────────────
-  if (!result.success) {
-    // Instant retry
-    console.log(`[task-worker] First attempt failed for ${ticketId}, instant retry...`);
-    await writeActivity(ticketId, "Retry", "First attempt failed, retrying immediately...", "warning");
+  // ── Auto-retry (configurable, default 1) ──────────────────────────────
+  const [settingsRow] = await sql`SELECT max_retries FROM worker_settings WHERE id = 1 LIMIT 1`;
+  const maxRetries = Number(settingsRow?.max_retries ?? 1);
+  let retryCount = 0;
+  while (!result.success && retryCount < maxRetries) {
+    retryCount++;
+    console.log(`[task-worker] Auto-retry ${retryCount}/${maxRetries} for ${ticketId}...`);
+    await writeActivity(ticketId, "Retry", `Attempt ${retryCount + 1} — retrying immediately...`, "warning");
     try {
       const { stdout } = await execFileAsync("openclaw", args, { timeout: 10 * 60 * 1000, env: process.env });
       const parsed = JSON.parse(stdout);
@@ -268,9 +272,9 @@ const prompt = buildTicketPrompt(ticket, subtaskRows, commentRows, grouped, 'Exe
     }
   }
 
-  // Fallback model retry if still failing
+  // Fallback model retry if still failing and event has one set
   if (!result.success && ticket.fallback_model) {
-    console.log(`[task-worker] Retry failed for ${ticketId}, trying fallback model: ${ticket.fallback_model}`);
+    console.log(`[task-worker] All retries failed for ${ticketId}, trying fallback model: ${ticket.fallback_model}`);
     await writeActivity(ticketId, "Fallback retry", `Retrying with fallback model: ${ticket.fallback_model}`, "warning");
     const fallbackArgs = ["agent", "--agent", agentId, "--model", ticket.fallback_model, "--message", prompt, "--json"];
     try {

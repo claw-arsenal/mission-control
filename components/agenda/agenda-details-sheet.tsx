@@ -40,6 +40,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { IconDotsVertical } from "@tabler/icons-react";
+import { useNow, formatDuration, LiveDuration } from "@/hooks/use-now";
 import {
   IconCalendar,
   IconClock,
@@ -378,20 +379,12 @@ function ArtifactFiles({ stepId, files }: { stepId: string; files: ArtifactFile[
   );
 }
 
-function formatDuration(startedAt: string | null | undefined, finishedAt: string | null | undefined): string | null {
-  if (!startedAt) return null;
-  const start = new Date(startedAt).getTime();
-  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
-  const diffMs = end - start;
-  if (diffMs < 0) return null;
-  const secs = Math.floor(diffMs / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = secs % 60;
-  if (mins < 60) return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+function AttemptDuration({ startedAt, finishedAt }: { startedAt: string; finishedAt: string | null }) {
+  const isLive = !!startedAt && !finishedAt;
+  const now = useNow(isLive ? 1_000 : 60_000);
+  const dur = formatDuration(startedAt, finishedAt, now.getTime());
+  if (!dur) return null;
+  return <> · {dur}</>;
 }
 
 function humanRecurrence(recurrence: string) {
@@ -411,10 +404,14 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [copyRequested, setCopyRequested] = useState(false);
 
+  const isRecurring = event ? (event.recurrence && event.recurrence !== "none") : false;
+
   // Fetch occurrences on mount (component is keyed, so this runs fresh each time)
   useEffect(() => {
     if (!open || !event?.id) return;
     const controller = new AbortController();
+
+    const recurring = event.recurrence && event.recurrence !== "none";
 
     void (async () => {
       try {
@@ -429,7 +426,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
           const occs = json.occurrences ?? [];
           if (event.occurrenceId && occs.some((o: { id: string }) => o.id === event.occurrenceId)) {
             setSelectedOccurrenceId(event.occurrenceId);
-          } else if (!isRecurring && occs.length > 0) {
+          } else if (!recurring && occs.length > 0) {
             // Non-recurring: safe to pick the only occurrence
             setSelectedOccurrenceId(occs[0].id);
           }
@@ -467,7 +464,6 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
 
   if (!event) return null;
 
-  const isRecurring = event.recurrence && event.recurrence !== "none";
   const resolvedAgentName = (() => {
     if (event.agentName) return event.agentName;
     if (event.agentId) {
@@ -532,10 +528,14 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                     {/* Event ID — inline, copyable */}
                     <button
                       className="text-[10px] font-mono text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
-                      title="Click to copy event ID"
-                      onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(event.id); }}
+                      title={isRecurring && selectedOccurrenceId ? "Click to copy occurrence ID" : "Click to copy event ID"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const idToCopy = (isRecurring && selectedOccurrenceId) ? selectedOccurrenceId : event.id;
+                        void navigator.clipboard.writeText(idToCopy);
+                      }}
                     >
-                      {event.id.slice(0, 8)}
+                      {(isRecurring && selectedOccurrenceId) ? selectedOccurrenceId.slice(0, 8) : event.id.slice(0, 8)}
                     </button>
                   </div>
                 </div>
@@ -547,35 +547,36 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-48">
-                      {selectedOccurrence?.status === "running" ? (
-                        <DropdownMenuItem disabled className="gap-2 opacity-50">
-                          <IconLock className="size-3.5" />
-                          Edit (running)
-                        </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => onEdit(event)}>
-                          <IconPencil className="size-3.5" />
-                          Edit
-                        </DropdownMenuItem>
-                      )}
+                      <DropdownMenuItem
+                        className={`gap-2 ${selectedOccurrence?.status === "running" ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                        disabled={selectedOccurrence?.status === "running"}
+                        onClick={() => { if (selectedOccurrence?.status !== "running") onEdit(event); }}
+                      >
+                        {selectedOccurrence?.status === "running" ? <IconLock className="size-3.5" /> : <IconPencil className="size-3.5" />}
+                        {selectedOccurrence?.status === "running" ? "Edit (running)" : "Edit"}
+                      </DropdownMenuItem>
                       {onCopy && (
                         <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => { onCopy(event); onClose(); }}>
                           <IconCopy className="size-3.5" />
                           Duplicate
                         </DropdownMenuItem>
                       )}
-                      {selectedOccurrence && ["running", "needs_retry", "failed", "expired"].includes(selectedOccurrence.status) && selectedOccurrenceId && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="gap-2 cursor-pointer text-amber-600 dark:text-amber-400"
-                            onClick={() => onRetry(selectedOccurrenceId)}
-                          >
-                            <IconRefresh className="size-3.5" />
-                            {selectedOccurrence.status === "running" ? "Force Retry" : "Retry"}
-                          </DropdownMenuItem>
-                        </>
-                      )}
+                      {selectedOccurrence && selectedOccurrenceId && (() => {
+                        const canRetry = ["running", "needs_retry", "failed", "expired"].includes(selectedOccurrence.status);
+                        return (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className={`gap-2 ${canRetry ? "cursor-pointer text-amber-600 dark:text-amber-400" : "opacity-50 cursor-not-allowed"}`}
+                              disabled={!canRetry}
+                              onClick={() => { if (canRetry) onRetry(selectedOccurrenceId); }}
+                            >
+                              <IconRefresh className="size-3.5" />
+                              {!canRetry ? "Retry (completed)" : selectedOccurrence.status === "running" ? "Force Retry" : "Retry"}
+                            </DropdownMenuItem>
+                          </>
+                        );
+                      })()}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         variant="destructive"
@@ -743,7 +744,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                       <CardHeader>
                         <CardDescription>Duration</CardDescription>
                         <CardTitle className="text-lg font-semibold tabular-nums">
-                          {formatDuration(selectedAttempt.started_at, selectedAttempt.finished_at) ?? "—"}
+                          {selectedAttempt.finished_at ? (formatDuration(selectedAttempt.started_at, selectedAttempt.finished_at) ?? "—") : <LiveDuration startedAt={selectedAttempt.started_at} finishedAt={selectedAttempt.finished_at} />}
                         </CardTitle>
                         <CardAction>
                           <Badge variant="outline" className={
@@ -819,7 +820,6 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                     </p>
                     {attempts.map((attempt) => {
                       const isSelected = attempt.id === selectedAttemptId;
-                      const dur = formatDuration(attempt.started_at, attempt.finished_at);
                       return (
                         <Card
                           key={attempt.id}
@@ -835,7 +835,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                           }}
                         >
                           <CardHeader>
-                            <CardDescription>Attempt #{attempt.attempt_no}{dur ? ` · ${dur}` : ""}</CardDescription>
+                            <CardDescription>Attempt #{attempt.attempt_no}<AttemptDuration startedAt={attempt.started_at} finishedAt={attempt.finished_at} /></CardDescription>
                             <CardTitle className="text-base font-semibold">
                               <ResultBadge status={attempt.status} />
                             </CardTitle>
@@ -1009,7 +1009,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
             </AlertDialogDescription>
           </AlertDialogHeader>
           {isRecurring ? (
-            <div className="flex flex-col gap-2 mt-2">
+            <div className="flex flex-col gap-2 mt-2 pr-6">
               <Button
                 variant="outline"
                 className="h-auto px-4 py-3 justify-start text-left gap-3 cursor-pointer border-destructive/30 hover:bg-destructive/5"
@@ -1032,31 +1032,12 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
               <Button
                 variant="outline"
                 className="h-auto px-4 py-3 justify-start text-left gap-3 cursor-pointer border-destructive/30 hover:bg-destructive/5"
-                onClick={() => {
-                  // Delete this occurrence + all future ones
-                  if (selectedOccurrenceId) {
-                    void fetch(`/api/agenda/events/${event.id}/occurrences/${selectedOccurrenceId}`, { method: "DELETE" });
-                  }
-                  onDelete(event.id);
-                  setDeleteDialogOpen(false);
-                  onClose();
-                }}
+                onClick={() => { onDelete(event.id); setDeleteDialogOpen(false); onClose(); }}
               >
                 <IconX className="size-4 text-destructive shrink-0" />
                 <div>
-                  <p className="font-semibold text-sm text-destructive">This and all future</p>
-                  <p className="text-xs text-muted-foreground">Cancel this occurrence and stop all future runs. Past runs are kept.</p>
-                </div>
-              </Button>
-              <Button
-                variant="outline"
-                className="h-auto px-4 py-3 justify-start text-left gap-3 cursor-pointer border-destructive/30 hover:bg-destructive/5"
-                onClick={() => { onDelete(event.id); setDeleteDialogOpen(false); onClose(); }}
-              >
-                <IconRepeat className="size-4 text-destructive shrink-0" />
-                <div>
-                  <p className="font-semibold text-sm text-destructive">Stop entire series</p>
-                  <p className="text-xs text-muted-foreground">Cancel all future runs and deactivate the series. Past runs are kept for history.</p>
+                  <p className="font-semibold text-sm text-destructive">Delete all future events</p>
+                  <p className="text-xs text-muted-foreground">Stop the entire series and cancel all future runs. Past runs are kept for history.</p>
                 </div>
               </Button>
               <AlertDialogFooter className="mt-1">

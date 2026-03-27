@@ -63,12 +63,12 @@ async function logTaskAudit(
 
 async function getWorkerSettings(sql: ReturnType<typeof getSql>) {
   const rows = await sql`
-    select enabled, poll_interval_seconds, max_concurrency, last_tick_at, agenda_concurrency, default_execution_window_minutes
+    select enabled, poll_interval_seconds, max_concurrency, last_tick_at, agenda_concurrency, default_execution_window_minutes, auto_retry_after_minutes, max_retries, default_fallback_model
     from worker_settings
     where id = 1
     limit 1
   `;
-  const row = rows[0] || { enabled: true, poll_interval_seconds: 20, max_concurrency: 3, last_tick_at: null, agenda_concurrency: 5, default_execution_window_minutes: 30 };
+  const row = rows[0] || { enabled: true, poll_interval_seconds: 20, max_concurrency: 3, last_tick_at: null, agenda_concurrency: 5, default_execution_window_minutes: 30, auto_retry_after_minutes: 0, max_retries: 1, default_fallback_model: "" };
   return {
     enabled: Boolean(row.enabled),
     pollIntervalSeconds: Number(row.poll_interval_seconds || 20),
@@ -76,6 +76,9 @@ async function getWorkerSettings(sql: ReturnType<typeof getSql>) {
     lastTickAt: row.last_tick_at ? String(row.last_tick_at) : null,
     agendaConcurrency: Number(row.agenda_concurrency || 5),
     defaultExecutionWindowMinutes: Number(row.default_execution_window_minutes || 30),
+    autoRetryAfterMinutes: Number(row.auto_retry_after_minutes || 0),
+    maxRetries: Number(row.max_retries ?? 1),
+    defaultFallbackModel: String(row.default_fallback_model || ""),
   };
 }
 
@@ -632,6 +635,9 @@ export async function POST(request: Request) {
       const maxConcurrency = body.maxConcurrency === undefined ? null : Number(body.maxConcurrency);
       const agendaConcurrency = body.agendaConcurrency === undefined ? null : Number(body.agendaConcurrency);
       const defaultExecutionWindowMinutes = body.defaultExecutionWindowMinutes === undefined ? null : Number(body.defaultExecutionWindowMinutes);
+      const autoRetryAfterMinutes = body.autoRetryAfterMinutes === undefined ? null : Number(body.autoRetryAfterMinutes);
+      const maxRetries = body.maxRetries === undefined ? null : Number(body.maxRetries);
+      const defaultFallbackModel = body.defaultFallbackModel === undefined ? null : String(body.defaultFallbackModel || "");
 
       if (pollIntervalSeconds !== null && (!Number.isFinite(pollIntervalSeconds) || pollIntervalSeconds < 5 || pollIntervalSeconds > 300)) {
         return fail("pollIntervalSeconds must be between 5 and 300");
@@ -645,16 +651,25 @@ export async function POST(request: Request) {
       if (defaultExecutionWindowMinutes !== null && (!Number.isFinite(defaultExecutionWindowMinutes) || defaultExecutionWindowMinutes < 1 || defaultExecutionWindowMinutes > 1440)) {
         return fail("defaultExecutionWindowMinutes must be between 1 and 1440");
       }
+      if (autoRetryAfterMinutes !== null && (!Number.isFinite(autoRetryAfterMinutes) || autoRetryAfterMinutes < 0 || autoRetryAfterMinutes > 1440)) {
+        return fail("autoRetryAfterMinutes must be between 0 and 1440");
+      }
+      if (maxRetries !== null && (!Number.isFinite(maxRetries) || maxRetries < 0 || maxRetries > 5)) {
+        return fail("maxRetries must be between 0 and 5");
+      }
 
       await sql`
-        insert into worker_settings (id, enabled, poll_interval_seconds, max_concurrency, agenda_concurrency, default_execution_window_minutes)
-        values (1, coalesce(${enabled}, true), coalesce(${pollIntervalSeconds}, 20), coalesce(${maxConcurrency}, 3), coalesce(${agendaConcurrency}, 5), coalesce(${defaultExecutionWindowMinutes}, 30))
+        insert into worker_settings (id, enabled, poll_interval_seconds, max_concurrency, agenda_concurrency, default_execution_window_minutes, auto_retry_after_minutes, max_retries, default_fallback_model)
+        values (1, coalesce(${enabled}, true), coalesce(${pollIntervalSeconds}, 20), coalesce(${maxConcurrency}, 3), coalesce(${agendaConcurrency}, 5), coalesce(${defaultExecutionWindowMinutes}, 30), coalesce(${autoRetryAfterMinutes}, 0), coalesce(${maxRetries}, 1), coalesce(${defaultFallbackModel}, ''))
         on conflict (id) do update
           set enabled = coalesce(${enabled}, worker_settings.enabled),
               poll_interval_seconds = coalesce(${pollIntervalSeconds}, worker_settings.poll_interval_seconds),
               max_concurrency = coalesce(${maxConcurrency}, worker_settings.max_concurrency),
               agenda_concurrency = coalesce(${agendaConcurrency}, worker_settings.agenda_concurrency),
               default_execution_window_minutes = coalesce(${defaultExecutionWindowMinutes}, worker_settings.default_execution_window_minutes),
+              auto_retry_after_minutes = coalesce(${autoRetryAfterMinutes}, worker_settings.auto_retry_after_minutes),
+              max_retries = coalesce(${maxRetries}, worker_settings.max_retries),
+              default_fallback_model = coalesce(${defaultFallbackModel}, worker_settings.default_fallback_model),
               updated_at = now()
       `;
 

@@ -21,8 +21,10 @@ import {
   IconPencil,
   IconTrash,
   IconCopy,
+  IconPlayerPlay,
 } from "@tabler/icons-react";
 import { ProcessEditorModal } from "@/components/processes/process-editor-modal";
+import { ProcessSimulateModal } from "@/components/processes/process-simulate-modal";
 import { useProcesses } from "@/hooks/use-processes";
 
 export function ProcessesPageClient() {
@@ -33,6 +35,10 @@ export function ProcessesPageClient() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingName, setDeletingName] = useState("");
+  const [tiedEvents, setTiedEvents] = useState<{ id: string; title: string }[]>([]);
+  const [simulateOpen, setSimulateOpen] = useState(false);
+  const [simulateProcessId, setSimulateProcessId] = useState<string | null>(null);
+  const [simulateProcessName, setSimulateProcessName] = useState("");
 
   const handleSave = async (data: Parameters<typeof createProcess>[0]) => {
     if (editingProcessId) {
@@ -76,9 +82,18 @@ export function ProcessesPageClient() {
     setEditorOpen(true);
   };
 
-  const handleDeleteClick = (id: string, name: string) => {
+  const handleDeleteClick = async (id: string, name: string) => {
     setDeletingId(id);
     setDeletingName(name);
+    setTiedEvents([]);
+    // Check for tied agenda events
+    try {
+      const res = await fetch(`/api/processes/${id}`, { cache: "reload" });
+      const json = await res.json();
+      if (json.ok && Array.isArray(json.tiedEvents)) {
+        setTiedEvents(json.tiedEvents);
+      }
+    } catch { /* ignore */ }
     setDeleteDialogOpen(true);
   };
 
@@ -87,10 +102,17 @@ export function ProcessesPageClient() {
     setDeleteDialogOpen(false);
     setDeletingId(null);
     setDeletingName("");
+    setTiedEvents([]);
   };
 
   const handleDuplicate = async (id: string) => {
     await duplicateProcess(id);
+  };
+
+  const handleSimulate = (id: string, name: string) => {
+    setSimulateProcessId(id);
+    setSimulateProcessName(name);
+    setSimulateOpen(true);
   };
 
   return (
@@ -162,6 +184,15 @@ export function ProcessesPageClient() {
                     <Button
                       size="icon"
                       variant="ghost"
+                      className="size-7 cursor-pointer"
+                      onClick={() => handleSimulate(p.id, p.name)}
+                      title="Simulate"
+                    >
+                      <IconPlayerPlay className="size-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
                       className="size-7 text-destructive/70 hover:text-destructive cursor-pointer"
                       onClick={() => handleDeleteClick(p.id, p.name)}
                       title="Delete"
@@ -196,6 +227,13 @@ export function ProcessesPageClient() {
         onSave={handleSave}
       />
 
+      <ProcessSimulateModal
+        open={simulateOpen}
+        processId={simulateProcessId ?? undefined}
+        processName={simulateProcessName}
+        onClose={() => { setSimulateOpen(false); setSimulateProcessId(null); setSimulateProcessName(""); }}
+      />
+
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -204,13 +242,28 @@ export function ProcessesPageClient() {
               This will permanently delete &ldquo;{deletingName}&rdquo; and all its versions. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {tiedEvents.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
+              <p className="font-semibold text-amber-700 dark:text-amber-400 mb-1.5">
+                ⚠️ {tiedEvents.length} agenda event{tiedEvents.length === 1 ? "" : "s"} use this process:
+              </p>
+              <ul className="list-disc pl-5 text-xs text-amber-600 dark:text-amber-400/80 space-y-0.5">
+                {tiedEvents.map((e) => (
+                  <li key={e.id}>{e.title}</li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground mt-2">
+                All future occurrences of these events will be cancelled. Past runs are kept.
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteConfirm}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tiedEvents.length > 0 ? "Delete process & cancel events" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

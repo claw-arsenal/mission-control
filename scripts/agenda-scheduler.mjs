@@ -61,6 +61,46 @@ async function checkRedis() {
   }
 }
 
+/**
+ * Timezone-aware RRULE expansion.
+ * Keeps the local time consistent across DST boundaries.
+ * e.g. 02:08 CET stays 02:08 CEST after the clock change.
+ */
+function localTimeToUTC(localDateStr, localTimeStr, timezone) {
+  // Try multiple UTC offsets to find the one that renders correctly in the target timezone
+  // This handles DST gaps (e.g. 02:08 CET doesn't exist on spring-forward day)
+  const targetLocal = `${localDateStr}T${localTimeStr}`;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const get = (parts) => {
+    const g = (type) => parts.find((p) => p.type === type)?.value ?? "";
+    return `${g("year")}-${g("month")}-${g("day")}T${g("hour")}:${g("minute")}`;
+  };
+
+  const base = new Date(`${localDateStr}T${localTimeStr}:00Z`);
+  for (let offsetH = -12; offsetH <= 14; offsetH++) {
+    const candidate = new Date(base.getTime() - offsetH * 3600000);
+    const rendered = get(fmt.formatToParts(candidate));
+    if (rendered === targetLocal) return candidate;
+  }
+  // Fallback: if DST gap makes the time impossible, shift forward 1 hour (spring-forward)
+  return new Date(base.getTime() - 3600000);
+}
+
+function extractLocalTime(utcDate, timezone) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = fmt.formatToParts(utcDate);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
+}
+
 async function expandOccurrences(event, from, to) {
   const startDate = new Date(event.starts_at);
   const until = event.recurrence_until ? new Date(event.recurrence_until) : to;
@@ -75,10 +115,23 @@ async function expandOccurrences(event, from, to) {
 
   try {
     const { RRule } = await import("rrule");
-    const rule = RRule.fromString(event.recurrence_rule);
-    return rule.between(from, rangeEnd, true);
-  } catch {
-    // Fallback: single occurrence
+    const tz = event.timezone || "UTC";
+    const { date: localDate, time: localTime } = extractLocalTime(startDate, tz);
+
+    // Expand RRULE using dtstart so it knows the series anchor
+    const opts = RRule.parseString(event.recurrence_rule);
+    opts.dtstart = startDate;
+    const rule = new RRule(opts);
+    const rawDates = rule.between(from, rangeEnd, true);
+
+    // For each expanded date, re-anchor to the original local time
+    // This fixes DST: 02:08 CET stays 02:08 CEST
+    return rawDates.map((d) => {
+      const { date: occDate } = extractLocalTime(d, tz);
+      return localTimeToUTC(occDate, localTime, tz);
+    });
+  } catch (err) {
+    console.warn("[agenda-scheduler] RRULE expansion failed:", err.message);
     if (startDate >= from && startDate <= to) return [startDate];
     return [];
   }

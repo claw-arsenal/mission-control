@@ -57,7 +57,7 @@ Open **http://localhost:3000**
 | `/agents` | Agent status cards with model, heartbeat, detail pages |
 | `/logs` | Live log explorer, job queues, and service management |
 | `/approvals` | Pending plan approval queue |
-| `/settings` | Theme, system updates, clean reset, uninstall |
+| `/settings` | Theme, notifications, agenda settings (concurrency, execution window, auto-retry, fallback model, max retries), system updates, clean reset, uninstall |
 
 ## Architecture
 
@@ -131,6 +131,8 @@ The task-worker and agenda-worker send Telegram notifications for lifecycle even
 - Month / Week / Day views with event pills
 - **Real-time updates via SSE**: PostgreSQL LISTEN/NOTIFY → Server-Sent Events (no polling)
 - **Timezone-aware rendering**: events display on the correct day in the user's timezone (CET/CEST, not GMT+1)
+- **DST-safe RRULE expansion**: recurring events keep their local time across daylight saving changes (02:08 CET stays 02:08 CEST)
+- **DB-time execution window check**: uses `SELECT now()` from Postgres, not worker's local clock — avoids clock skew
 - **Date-range-per-view**: month/week/day views each fetch their exact visible range (with ±1 day buffer for timezone edge cases)
 - Multi-step creation wizard: Type → Details → Schedule → Review
 - One-time (date + time) or Repeatable (daily/weekly with RRULE)
@@ -146,24 +148,172 @@ The task-worker and agenda-worker send Telegram notifications for lifecycle even
 - **Artifact capture**: agent-generated files saved to disk and downloadable from event details
 - **Cumulative step context**: each process step receives previous step outputs
 - Recurring edit scope: "Only this occurrence" or "This and all upcoming"
-- **Three-option delete for recurring events**: "Only this occurrence" / "This and all future" / "Stop entire series"
+- **Two-option delete for recurring events**: "Only this occurrence" / "Delete all future events"
 - **3-dot action menu**: Edit, Duplicate, Force Retry, Delete in a single dropdown (with disabled states and tooltips)
 - **Color-coded status badges**: green (active/succeeded), amber (running), red (failed/needs_retry), blue (scheduled/recurring), with Radix tooltips explaining each status
-- Stale lock recovery (occurrences stuck >15min auto-reset)
+- Stale lock recovery (occurrences stuck >15min → `needs_retry` + Telegram alert, user decides)
 - **Now indicator**: current time line in week/day views (behind events, not overlapping)
 
-### Resilient Job Orchestration (v1.4.0)
-- **Execution windows**: each event has a configurable window (default 30 minutes) — jobs that miss the window are marked `expired` with Telegram notification
-- **Auto-retry**: first failure auto-retries immediately; second failure sets `needs_retry` for manual intervention
-- **Fallback models**: if the primary model hits a rate limit (429/quota), the worker automatically retries with the configured fallback model
-- **Postgres-level claim locks**: prevents duplicate execution — only one worker can claim an occurrence
-- **Force retry**: can force-retry a stuck/running occurrence — marks the current attempt as failed and re-queues with correct attempt numbering
-- **Long-running alert**: if an agenda event runs for more than 5 minutes, sends a Telegram notification with event details and link to Mission Control
-- **Event locking**: cannot edit an event while any of its occurrences are running (tooltip explains why)
-- **Failed bucket**: dedicated UI card showing failed/needs_retry/expired occurrences with retry buttons
-- **Telegram notifications**: automatic alerts for needs_retry, failed, expired, and long-running events
-- **Correct attempt numbering**: retries always get the next sequential attempt number, even after force retries
-- New statuses: `needs_retry` (manual intervention required), `expired` (missed execution window)
+### Resilient Job Orchestration (v1.5.0)
+
+#### Retry Flow (Agenda Events)
+
+When an agenda event runs:
+
+```
+Step 1: Execute all steps (free prompt + attached processes)
+   ↓ succeeded? → done ✅
+   ↓ failed?
+Step 2: Auto-retry (same model, instant, no delay)
+        Retries up to max_retries times (default: 1, configurable 0–5 in Settings)
+   ↓ succeeded? → done ✅
+   ↓ all auto-retries failed?
+Step 3: Check — does this event have a fallback model?
+        (set per-event in the event modal)
+   ↓ no fallback model → skip to Step 4
+   ↓ yes → retry once with fallback model
+   ↓ succeeded? → done ✅
+   ↓ failed?
+Step 4: Set status to "needs_retry"
+        → Telegram notification sent
+        → User decides: Edit / Retry Now / Delete
+        → "Retry Now" re-queues instantly from Step 1
+```
+
+**Settings (configurable in /settings):**
+| Setting | Default | What it does |
+|---|---|---|
+| Concurrency | 5 | Max parallel agenda jobs (1–10) |
+| Execution Window | 30 min | How late a job can start; past this → `needs_retry` + Telegram alert |
+| Max Retries | 1 | How many instant auto-retries before trying fallback (0 = no auto-retry) |
+
+**Per-event settings (in event modal):**
+| Setting | What it does |
+|---|---|
+| Fallback Model | Model to use after all retries fail (e.g. `openrouter/openai/gpt-5.4-mini`) |
+| Agent | Which OpenClaw agent runs this event |
+| Model Override | Override the agent's default model for this event |
+
+#### Retry Flow (Kanban Tickets)
+
+Same flow as agenda events:
+```
+Step 1: Execute ticket via assigned agent
+   ↓ succeeded? → done, move to Completed ✅
+   ↓ failed?
+Step 2: Auto-retry (same model, instant, up to max_retries times)
+   ↓ succeeded? → done ✅
+   ↓ all retries failed?
+Step 3: Fallback model (if ticket has one set) → one more try
+   ↓ succeeded? → done ✅
+   ↓ failed?
+Step 4: Set status to "needs_retry"
+        → Telegram notification sent
+        → User decides: Edit / Retry Now / Delete
+```
+
+Tickets also use:
+- **DB-time execution window check** (default 60 min) — missed window → `needs_retry` (not `expired`)
+- **Postgres claim lock** — same as agenda, prevents duplicate execution
+- **max_retries from Settings** — shared with agenda events
+
+#### What Happens When...
+
+**Event or ticket fails:**
+1. Worker auto-retries instantly (up to `max_retries` times, default 1)
+2. If still failing and fallback model is configured → tries once with fallback
+3. If that also fails → status = `needs_retry`, Telegram alert, user decides
+
+**Event is stuck / running too long (>5 min):**
+1. At 5 minutes: Telegram alert sent to your chat with event name, attempt number, start time
+2. Retry button always available — user can force-retry at any time
+3. Force-retry marks the current attempt as failed and re-queues the event
+
+**Event misses its execution window:**
+1. Worker picks up the job but notices it's past the window (default 30 min)
+2. Status set to `needs_retry` (not `expired` — so you can retry immediately)
+3. Telegram alert: "missed execution window — needs manual retry"
+4. Click "Retry" in Mission Control → re-queues instantly, ignores window check
+
+**Worker crashes or restarts during execution:**
+1. Occurrence stays in "running" state with a stale lock
+2. After 15 minutes: stale lock recovery sets it to `needs_retry` + Telegram alert — never auto-re-executes
+3. User decides: Force Retry / Edit / Delete from the event details (available any time)
+4. Same behavior for tickets: stuck executions → `needs_retry` after stale lock timeout
+
+**Two workers try to pick up the same job:**
+1. Postgres claim lock (`UPDATE ... WHERE status IN ('scheduled','queued','needs_retry')`)
+2. Only the first `UPDATE` succeeds (returns 1 row), the other gets 0 rows and skips
+3. No duplicate execution possible
+
+**User clicks "Retry" while auto-retry is already scheduled:**
+1. Manual retry changes status to `scheduled` via API
+2. Worker claim lock ensures only one execution starts
+3. No race condition — whichever pickup succeeds first runs, other skips
+
+**Primary model hits rate limit (429/quota):**
+1. Step fails normally — enters the standard retry flow
+2. Auto-retries with same model (will likely fail again if rate limit persists)
+3. Then fallback model if set, then `needs_retry` — user decides (wait for rate limit to clear, change model, or retry later)
+
+**Database goes down during execution:**
+1. Worker can't write step results — attempt fails with DB error
+2. Occurrence set to `needs_retry` (if the catch block can still reach DB)
+3. If DB is fully unreachable — worker crashes, stale lock recovery handles it when DB comes back
+4. Never auto-re-executes — user decides when to retry
+
+**Redis goes down:**
+1. BullMQ can't enqueue or consume jobs — scheduler skips cycles, worker stalls
+2. Events stay as `scheduled` in Postgres — no data loss
+3. When Redis recovers, scheduler picks them up on next cycle
+4. If they're past the execution window → `needs_retry` (not auto-executed)
+5. User retries manually — retry resets `scheduled_for` to now, so window passes
+
+**Fallback model is the same as primary:**
+1. Not detected — worker retries with the "fallback" which is the same model
+2. Burns one retry cycle doing the same thing
+3. Recommendation: set a different model as fallback, or leave empty
+
+**Event/ticket is deleted while a retry is pending:**
+1. DB update returns 0 rows (ticket gone)
+2. Worker silently skips — no crash, no error
+3. Any timers (alert, auto-retry) clear themselves
+
+**Agent is changed while retry is pending:**
+1. Worker reads `assigned_agent_id` fresh from the job data each attempt
+2. For agenda events: agent ID is baked into the job → stays the same until re-queued
+3. For tickets: next pickup reads the latest agent from DB → uses new agent
+
+**Recurring event — one day fails, others succeed:**
+1. Each day gets its own independent occurrence with its own status
+2. Monday can be "succeeded", Tuesday "needs_retry", Wednesday "scheduled"
+3. Clicking a day shows only that day's runs — no cross-pollination
+
+**SSE connection drops (browser loses real-time updates):**
+1. EventSource auto-reconnects after 5 seconds
+2. On reconnect: full refresh of events + failed count
+3. No data loss — DB is the source of truth
+
+**User edits an event while it's running:**
+1. Edit button shows "Edit (running)" and is disabled
+2. Tooltip explains why
+3. Must wait for completion or force-retry first
+
+**All notifications sent via Telegram:**
+| Event | Message |
+|---|---|
+| Running >5 min | ⏱️ Long-running alert with event name + attempt + duration |
+| Missed window | ⚠️ Missed execution window (Xm late) |
+| All retries exhausted | ⚠️ Needs manual retry |
+| Auto-retry triggered | 🔄 Exceeded time limit, needs manual retry |
+| Fatal error | ❌ Event failed with error message |
+
+#### Safety mechanisms
+- **Postgres claim locks**: prevent duplicate execution across workers
+- **Stale lock recovery**: stuck occurrences (>15 min) set to `needs_retry` with Telegram alert — never auto-re-executed
+- **Service heartbeats**: workers report health every 30 seconds to `service_health` table
+- **Correct attempt numbering**: always reads max(attempt_no) from DB before creating new attempt
+- **Cumulative context**: each process step receives previous outputs for coherent multi-step execution
 
 ### Service Health Monitoring
 - All workers report heartbeats to the `service_health` table every 30 seconds
@@ -173,11 +323,19 @@ The task-worker and agenda-worker send Telegram notifications for lifecycle even
 - API endpoint (`/api/services`) for service management and log access
 
 ### Processes
-- Card grid layout with create, edit, duplicate, delete
-- Multi-step editor wizard: Info → Steps → Review
+- Card grid layout with create, edit, duplicate, delete, **simulate**
+- **Delete safety**: if a process is tied to agenda events, shows a warning listing affected events; on confirm, cancels all future occurrences and deactivates the events (past runs preserved)
+- Multi-step editor wizard: Info → Steps → Review (with step validation — can't skip ahead until previous steps are valid)
 - Per-step: instruction, skill, agent, model override
 - Version tracking with labels
 - Clicking a process card opens edit with existing data pre-filled
+- **Simulation mode**: dry-run a process before saving or attaching to events
+  - Available from the Review step in the editor (for unsaved processes) and from each process card
+  - Runs each step live via SSE — shows step-by-step progress with loading indicators
+  - Displays full agent output per step with markdown rendering
+  - Detects files created during simulation (path regex across agent output)
+  - **Cleanup button**: deletes all files created during simulation with one click (only allowed paths: `/home/clawdbot/`, `/storage/`, `/tmp/`)
+  - Steps run with `[SIMULATION MODE]` prefix in the instruction so agents know not to make permanent changes
 
 ### Agents
 - Status cards with gradient accents, emoji avatars, pulse indicators
@@ -195,8 +353,9 @@ The task-worker and agenda-worker send Telegram notifications for lifecycle even
 open → [start] → queued → executing → done
 open → [planned] → planning → awaiting_approval → [approve] → queued → executing → done
                                                  → [reject] → draft
-failed → [auto-retry up to 3x with backoff] → needs_retry → [manual retry] → queued → executing → done
-expired (missed execution window) → [manual retry] → queued → executing → done
+failed → [instant retry] → executing → done
+                         → failed → [fallback model if set] → executing → done
+                                                             → needs_retry → [manual retry] → queued → ...
 ```
 
 No agent assigned = manual ticket (never auto-queued).
@@ -206,29 +365,18 @@ No agent assigned = manual ticket (never auto-queued).
 ```
 draft → [activate] → active
 active → [scheduler] → occurrence created (scheduled)
-scheduled → [worker claims] → running → succeeded
-                                      → failed → [auto-retry] → running → succeeded
-                                                               → needs_retry → [manual retry] → scheduled → ...
-                                      → [>5 min] → Telegram alert sent
-running → [force retry] → current attempt marked failed → scheduled → running → ...
-scheduled → [missed window] → expired → [manual retry] → scheduled → ...
+scheduled → [worker claims] → running → succeeded ✅
+         → [missed window] → needs_retry → [manual retry] → scheduled → ...
+
+running → succeeded ✅
+        → failed → [auto-retry 1..N times] → succeeded ✅
+                                            → [fallback model if set] → succeeded ✅
+                                                                      → needs_retry → [user: retry/edit/delete]
+        → [>5 min] → Telegram alert (still running, user decides)
+        → [force retry] → current attempt failed → re-scheduled → running → ...
 ```
 
-Recurring events: each date gets its own independent occurrence and run history.
-
-### Edge Cases & Failsafes
-
-| Scenario | Behavior |
-|---|---|
-| Worker restarts during execution | Occurrence stays "running" — use Force Retry to recover |
-| Event runs >5 minutes | Telegram alert sent to main session with event details |
-| Duplicate attempt numbers after force retry | Fixed: retry reads max(attempt_no) from DB before creating new attempt |
-| Click recurring event on future date (no occurrence yet) | Shows correct date in schedule, empty runs/output (no cross-pollination) |
-| Recurring event at 23:04 UTC in CET timezone | RRULE expanded with ±1 day buffer; client renders on correct CET day |
-| All retries exhausted | Status set to `needs_retry`, Telegram notification sent, retry button shown |
-| Edit while running | Edit button disabled with tooltip explaining why |
-| Delete recurring event | Three options: this occurrence / this + future / entire series |
-| SSE connection drops | Auto-reconnect after 5 seconds with exponential backoff |
+Recurring events: each date gets its own independent occurrence (unique `occurrence.id`) and run history. The parent `event.id` is shared across the series, but each day's execution, status, and output are fully isolated. The UI shows the occurrence ID (not the event ID) for recurring events. Editing "only this occurrence" creates an override without affecting other dates.
 
 ## File Serving
 
@@ -270,6 +418,8 @@ OpenClaw config is auto-discovered from `~/.openclaw/openclaw.json`. No OpenClaw
 | `/api/agenda/stats` | GET | Agenda statistics |
 | `/api/processes` | GET/POST | Process CRUD |
 | `/api/processes/[id]` | GET/PATCH/DELETE | Single process operations |
+| `/api/processes/simulate` | POST | SSE stream — simulate a process step-by-step |
+| `/api/processes/simulate/cleanup` | POST | Delete files created during simulation |
 | `/api/services` | GET/POST | Service health monitoring and management |
 | `/api/agents` | GET | Agent discovery (reads from DB + runtime) |
 | `/api/skills` | GET | Workspace skills list |
@@ -318,6 +468,13 @@ OpenClaw config is auto-discovered from `~/.openclaw/openclaw.json`. No OpenClaw
 Schema managed by `scripts/db-init.sh` (Docker) and `scripts/db-setup.mjs` (Node).
 
 Key tables: `workspaces`, `boards`, `columns`, `tickets`, `ticket_attachments`, `ticket_subtasks`, `ticket_comments`, `ticket_activity`, `agents`, `agent_logs`, `agenda_events`, `agenda_occurrences`, `agenda_run_attempts`, `agenda_run_steps`, `processes`, `process_versions`, `process_steps`, `worker_settings`, `service_health`.
+
+Reset everything: `npm run db:reset` or `bash scripts/clean.sh`.
+
+## License
+
+Part of the [OpenClaw](https://github.com/openclaw/openclaw) project.
+s_steps`, `worker_settings`, `service_health`.
 
 Reset everything: `npm run db:reset` or `bash scripts/clean.sh`.
 

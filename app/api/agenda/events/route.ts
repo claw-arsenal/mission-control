@@ -8,6 +8,44 @@ const ok = (data: Json = {}) => NextResponse.json({ ok: true, ...data });
 const fail = (message: string, status = 400) =>
   NextResponse.json({ ok: false, error: message }, { status });
 
+// Timezone-aware helpers for DST-safe RRULE expansion
+function extractLocalTime(utcDate: Date, timezone: string) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = fmt.formatToParts(utcDate);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
+}
+
+function localTimeToUTC(localDateStr: string, localTimeStr: string, timezone: string) {
+  // Try multiple UTC offsets to find the one that renders correctly in the target timezone
+  // This handles DST gaps (e.g. 02:08 CET doesn't exist on spring-forward day → use 02:08 CEST = 00:08 UTC)
+  const targetLocal = `${localDateStr}T${localTimeStr}`;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const get = (parts: Intl.DateTimeFormatPart[]) => {
+    const g = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    return `${g("year")}-${g("month")}-${g("day")}T${g("hour")}:${g("minute")}`;
+  };
+
+  // Try offsets from -12h to +14h in 1h steps to find a match
+  const base = new Date(`${localDateStr}T${localTimeStr}:00Z`);
+  for (let offsetH = -12; offsetH <= 14; offsetH++) {
+    const candidate = new Date(base.getTime() - offsetH * 3600000);
+    const rendered = get(fmt.formatToParts(candidate));
+    if (rendered === targetLocal) return candidate;
+  }
+  // Fallback: if DST gap makes the time impossible, shift forward 1 hour (spring-forward)
+  const fallback = new Date(base.getTime() - 3600000);
+  return fallback;
+}
+
 async function workspaceId(sql: ReturnType<typeof getSql>) {
   const rows = await sql`select id from workspaces order by created_at asc limit 1`;
   return rows[0]?.id ?? null;
@@ -110,19 +148,24 @@ export async function GET(request: Request) {
           }
           const rule = new RRule(rruleOptions);
 
-          // Use buffered range for RRULE — client-side timezone rendering
-          // will put each occurrence on the correct visual day
-          const occurrences = rule.between(rruleStart, rruleEnd, true);
+          // Use buffered range for RRULE — then re-anchor each to original local time
+          // so DST changes don't shift the event (02:08 CET stays 02:08 CEST)
+          const rawOccurrences = rule.between(rruleStart, rruleEnd, true);
+          const tz = event.timezone || "UTC";
+          const { time: localTime } = extractLocalTime(eventStart, tz);
 
-          for (const occ of occurrences) {
+          for (const rawOcc of rawOccurrences) {
+            const { date: occLocalDate } = extractLocalTime(rawOcc, tz);
+            const correctedOcc = localTimeToUTC(occLocalDate, localTime, tz);
             const endsAt = eventDuration
-              ? new Date(occ.getTime() + eventDuration).toISOString()
+              ? new Date(correctedOcc.getTime() + eventDuration).toISOString()
               : event.ends_at;
+            const { date: correctedDate } = extractLocalTime(correctedOcc, tz);
             expanded.push({
               ...event,
-              starts_at: occ.toISOString(),
+              starts_at: correctedOcc.toISOString(),
               ends_at: endsAt,
-              _occurrenceDate: occ.toISOString().split("T")[0],
+              _occurrenceDate: correctedDate,
             });
           }
         } catch {

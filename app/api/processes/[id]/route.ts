@@ -54,7 +54,16 @@ export async function GET(
       order by ps.step_order asc
     `;
 
-    return ok({ process, versions, steps });
+    // Find agenda events tied to any version of this process
+    const tiedEvents = await sql`
+      select distinct ae.id, ae.title
+      from agenda_events ae
+      join agenda_event_processes aep on aep.agenda_event_id = ae.id
+      join process_versions pv on pv.id = aep.process_version_id
+      where pv.process_id = ${id}
+    `;
+
+    return ok({ process, versions, steps, tiedEvents });
   } catch (error) {
     return fail(error instanceof Error ? error.message : "Failed to load process", 500);
   }
@@ -191,8 +200,34 @@ export async function DELETE(
     `;
     if (!existing) return fail("Process not found.", 404);
 
+    // Cancel future occurrences of tied agenda events (keep past runs)
+    const tiedEventIds = await sql`
+      select distinct ae.id
+      from agenda_events ae
+      join agenda_event_processes aep on aep.agenda_event_id = ae.id
+      join process_versions pv on pv.id = aep.process_version_id
+      where pv.process_id = ${id}
+    `;
+    if (tiedEventIds.length > 0) {
+      const ids = tiedEventIds.map((r) => (r as { id: string }).id);
+      // Cancel future scheduled occurrences
+      await sql`
+        UPDATE agenda_occurrences SET status = 'cancelled'
+        WHERE agenda_event_id = ANY(${ids})
+        AND status IN ('scheduled', 'queued')
+        AND scheduled_for > now()
+      `;
+      // Deactivate the events
+      await sql`
+        UPDATE agenda_events SET status = 'draft'
+        WHERE id = ANY(${ids})
+      `;
+      // Notify UI
+      await sql`SELECT pg_notify('agenda_change', ${JSON.stringify({ action: "process_deleted" })})`;
+    }
+
     await sql`delete from processes where id = ${id}`;
-    return ok();
+    return ok({ cancelledEvents: tiedEventIds.length });
   } catch (error) {
     return fail(error instanceof Error ? error.message : "Failed to delete process", 500);
   }

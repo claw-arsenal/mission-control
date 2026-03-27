@@ -37,6 +37,35 @@ function execAsync(command: string, args: string[]): Promise<string> {
   });
 }
 
+// Determine agent status + last activity from sessions list
+function deriveAgentStatus(sessionsJson: SessionsData): Record<string, { status: string; lastHeartbeatAt: string | null }> {
+  const result: Record<string, { status: string; lastHeartbeatAt: string | null }> = {};
+  const sessions = sessionsJson.sessions;
+  if (!Array.isArray(sessions)) return result;
+
+  // Group by agentId, find most recent updatedAt
+  const agentLatest: Record<string, number> = {};
+  for (const s of sessions) {
+    const agentId = (s as Record<string, unknown>).agentId as string | undefined;
+    const updatedAt = (s as Record<string, unknown>).updatedAt as number | undefined;
+    if (!agentId || !updatedAt) continue;
+    if (!agentLatest[agentId] || updatedAt > agentLatest[agentId]) {
+      agentLatest[agentId] = updatedAt;
+    }
+  }
+
+  const now = Date.now();
+  for (const [agentId, ts] of Object.entries(agentLatest)) {
+    const ageMs = now - ts;
+    // Active in last 5 minutes = running, otherwise idle
+    result[agentId] = {
+      status: ageMs <= 5 * 60 * 1000 ? "running" : "idle",
+      lastHeartbeatAt: new Date(ts).toISOString(),
+    };
+  }
+  return result;
+}
+
 async function refreshCache(): Promise<void> {
   const now = Date.now();
 
@@ -86,4 +115,9 @@ export async function getCachedAgents(): Promise<AgentListEntry[]> {
 export async function getCachedSessions(): Promise<SessionsData> {
   await refreshCache();
   return sessionsCache?.data ?? {};
+}
+
+export function getAgentStatuses(): Record<string, { status: string; lastHeartbeatAt: string | null }> {
+  if (!sessionsCache?.data) return {};
+  return deriveAgentStatus(sessionsCache.data);
 }

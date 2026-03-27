@@ -81,7 +81,10 @@ export function SettingsPageClient() {
   // Agenda settings
   const [agendaConcurrency, setAgendaConcurrency] = useState(5);
   const [defaultExecWindow, setDefaultExecWindow] = useState(30);
+  const [autoRetryAfterMinutes, setAutoRetryAfterMinutes] = useState(0);
   const [agendaSettingsLoading, setAgendaSettingsLoading] = useState(false);
+  const [defaultFallbackModel, setDefaultFallbackModel] = useState("");
+  const [maxRetries, setMaxRetries] = useState(1);
   const agendaMountedRef = useRef(false);
 
   useEffect(() => {
@@ -107,6 +110,9 @@ export function SettingsPageClient() {
         if (json.ok && json.workerSettings) {
           setAgendaConcurrency(json.workerSettings.agendaConcurrency ?? 5);
           setDefaultExecWindow(json.workerSettings.defaultExecutionWindowMinutes ?? 30);
+          setAutoRetryAfterMinutes(json.workerSettings.autoRetryAfterMinutes ?? 0);
+          setDefaultFallbackModel(json.workerSettings.defaultFallbackModel ?? "");
+          setMaxRetries(json.workerSettings.maxRetries ?? 1);
         }
       } catch { /* ignore */ }
     })();
@@ -322,36 +328,72 @@ export function SettingsPageClient() {
           <CardDescription>Configure agenda worker behavior</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="agenda-concurrency" className="text-sm font-semibold">
-                Concurrency
-              </Label>
-              <p className="text-xs text-muted-foreground">Max parallel agenda jobs (1–10)</p>
-              <Input
-                id="agenda-concurrency"
-                type="number"
-                min={1}
-                max={10}
-                value={agendaConcurrency}
-                onChange={(e) => setAgendaConcurrency(Math.max(1, Math.min(10, parseInt(e.target.value) || 5)))}
-                className="h-9 w-24"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="default-exec-window" className="text-sm font-semibold">
-                Retry Window (minutes)
-              </Label>
-              <p className="text-xs text-muted-foreground">If a task is this many minutes late, it goes to retry instead of auto-running</p>
-              <Input
-                id="default-exec-window"
-                type="number"
-                min={1}
-                max={1440}
-                value={defaultExecWindow}
-                onChange={(e) => setDefaultExecWindow(Math.max(1, Math.min(1440, parseInt(e.target.value) || 30)))}
-                className="h-9 w-24"
-              />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="agenda-concurrency" className="text-sm font-semibold">
+              Concurrency
+            </Label>
+            <p className="text-xs text-muted-foreground">Max parallel agenda jobs (1–10)</p>
+            <Input
+              id="agenda-concurrency"
+              type="number"
+              min={1}
+              max={10}
+              value={agendaConcurrency}
+              onChange={(e) => setAgendaConcurrency(Math.max(1, Math.min(10, parseInt(e.target.value) || 5)))}
+              className="h-9 w-24"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 pt-2 border-t">
+            <Label htmlFor="default-exec-window" className="text-sm font-semibold">
+              Execution Window (minutes)
+            </Label>
+            <p className="text-xs text-muted-foreground">How late a scheduled event can start before it&apos;s marked as needing retry (default 30 min)</p>
+            <Input
+              id="default-exec-window"
+              type="number"
+              min={1}
+              max={1440}
+              value={defaultExecWindow}
+              onChange={(e) => setDefaultExecWindow(Math.max(1, Math.min(1440, parseInt(e.target.value) || 30)))}
+              className="h-9 w-24"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 pt-2 border-t">
+            <Label htmlFor="max-retries" className="text-sm font-semibold">
+              Max Retries
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              How many instant retries before giving up (0 = no retries, fail immediately). Fallback model (set per event) is tried after all retries fail.
+            </p>
+            <Input
+              id="max-retries"
+              type="number"
+              min={0}
+              max={5}
+              value={maxRetries}
+              onChange={(e) => setMaxRetries(Math.max(0, Math.min(5, parseInt(e.target.value) || 1)))}
+              className="h-9 w-24"
+            />
+          </div>
+          <div className="rounded-lg border bg-muted/5 px-4 py-3">
+            <p className="text-xs font-semibold text-muted-foreground mb-2">Retry Flow</p>
+            <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <span className="size-5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center text-[10px] font-bold shrink-0">1</span>
+                <span>First attempt fails → <strong>Instant retry</strong> (same model, up to {maxRetries}×)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="size-5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center text-[10px] font-bold shrink-0">2</span>
+                <span>All retries failed → <strong>Fallback model</strong> (if set in event) → one more try</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="size-5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center text-[10px] font-bold shrink-0">3</span>
+                <span>Still failing → <strong>needs_retry</strong> — you decide (edit / retry / delete)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="size-5 rounded-full bg-muted flex items-center justify-center text-[10px] font-bold shrink-0 text-muted-foreground">⏱</span>
+                <span>Running &gt;5 min → <strong>Telegram alert</strong> sent to you with event details</span>
+              </div>
             </div>
           </div>
           <Button
@@ -369,6 +411,7 @@ export function SettingsPageClient() {
                     action: "updateWorkerSettings",
                     agendaConcurrency,
                     defaultExecutionWindowMinutes: defaultExecWindow,
+                    maxRetries,
                   }),
                 });
                 const json = await res.json();

@@ -246,6 +246,7 @@ on conflict (id) do nothing;
 alter table worker_settings add column if not exists last_tick_at timestamptz;
 alter table worker_settings add column if not exists agenda_concurrency integer not null default 5;
 alter table worker_settings add column if not exists default_execution_window_minutes integer not null default 30;
+alter table worker_settings add column if not exists auto_retry_after_minutes integer not null default 0;
 
 -- ─── Phase 2: Processes ──────────────────────────────────────────────────────
 
@@ -433,3 +434,8 @@ ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fallback_model text NOT NULL DEFAUL
 -- Note: execution_state is an unconstrained text column. The following are now valid:
 -- needs_retry — manual intervention required after max retries exhausted
 -- expired — missed the execution window
+
+-- v1.5.0: Add max_retries and default_fallback_model to worker_settings
+alter table worker_settings add column if not exists max_retries integer not null default 1;
+alter table worker_settings add column if not exists default_fallback_model text not null default '';
+

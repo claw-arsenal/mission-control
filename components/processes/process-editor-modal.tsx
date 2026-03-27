@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { ProcessSimulateModal } from "@/components/processes/process-simulate-modal";
 import {
   IconGripVertical,
   IconTrash,
@@ -34,6 +35,7 @@ import {
   IconChevronLeft,
   IconCpu,
   IconListDetails,
+  IconPlayerPlay,
 } from "@tabler/icons-react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -119,34 +121,40 @@ const defaultForm: ProcessFormData = {
 
 // ── Step indicator ───────────────────────────────────────────────────────────
 
-function StepIndicator({ currentStep, onStepClick }: { currentStep: number; onStepClick: (i: number) => void }) {
+function StepIndicator({ currentStep, canAdvanceTo, onStepClick }: { currentStep: number; canAdvanceTo: number; onStepClick: (i: number) => void }) {
   return (
     <div className="flex gap-1.5 w-full">
       {WIZARD_STEPS.map((step, i) => {
         const Icon = step.icon;
         const isActive = i === currentStep;
         const isDone = i < currentStep;
+        const isLocked = i > canAdvanceTo;
         return (
           <button
             key={step.key}
             type="button"
-            onClick={() => onStepClick(i)}
+            disabled={isLocked}
+            onClick={() => { if (!isLocked) onStepClick(i); }}
             className={[
-              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 cursor-pointer border",
-              isActive
-                ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                : isDone
-                  ? "bg-primary/10 text-primary border-primary/20 hover:bg-primary/15"
-                  : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted/60",
+              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 border",
+              isLocked
+                ? "bg-muted/20 text-muted-foreground/40 border-transparent cursor-not-allowed opacity-50"
+                : isActive
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm cursor-pointer"
+                  : isDone
+                    ? "bg-primary/10 text-primary border-primary/20 hover:bg-primary/15 cursor-pointer"
+                    : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted/60 cursor-pointer",
             ].join(" ")}
           >
             <div className={[
               "flex items-center justify-center size-6 rounded-full text-[10px] font-bold shrink-0",
-              isActive
-                ? "bg-primary-foreground/20 text-primary-foreground"
-                : isDone
-                  ? "bg-primary/20 text-primary"
-                  : "bg-muted-foreground/15 text-muted-foreground",
+              isLocked
+                ? "bg-muted-foreground/10 text-muted-foreground/40"
+                : isActive
+                  ? "bg-primary-foreground/20 text-primary-foreground"
+                  : isDone
+                    ? "bg-primary/20 text-primary"
+                    : "bg-muted-foreground/15 text-muted-foreground",
             ].join(" ")}>
               {isDone ? <IconCheck className="size-3" /> : i + 1}
             </div>
@@ -180,6 +188,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
   const [step, setStep] = useState(0);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [simulateOpen, setSimulateOpen] = useState(false);
 
   const initialDataRef = useRef(initialData);
   useEffect(() => {
@@ -216,6 +225,14 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
     }
     return null;
   };
+
+  // Compute highest step the user can navigate to (all previous steps must be valid)
+  const canAdvanceTo = (() => {
+    for (let i = 0; i < WIZARD_STEPS.length; i++) {
+      if (validateStep(i)) return i;
+    }
+    return WIZARD_STEPS.length - 1;
+  })();
 
   const goNext = () => {
     const err = validateStep(step);
@@ -519,6 +536,22 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
         <ReviewRow label="Steps" value={`${form.steps.length} step${form.steps.length === 1 ? "" : "s"}`} />
       </div>
 
+      {/* Simulate button */}
+      <div className="flex items-center justify-center mt-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 cursor-pointer"
+          onClick={(e) => {
+            e.preventDefault();
+            setSimulateOpen(true);
+          }}
+        >
+          <IconPlayerPlay className="size-3.5" />
+          Simulate Process
+        </Button>
+      </div>
+
       {/* Step summary cards */}
       <div className="flex flex-col gap-2 mt-1">
         {form.steps.map((s, i) => {
@@ -580,7 +613,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
 
         {/* Step indicator */}
         <div className="px-6 pt-3">
-          <StepIndicator currentStep={step} onStepClick={goToStep} />
+          <StepIndicator currentStep={step} canAdvanceTo={canAdvanceTo} onStepClick={goToStep} />
         </div>
 
         {/* Step content */}
@@ -636,6 +669,20 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
             </div>
           </div>
         </DialogFooter>
+
+        <ProcessSimulateModal
+          open={simulateOpen}
+          processName={form.name}
+          steps={form.steps.map((s) => ({
+            title: s.title,
+            instruction: s.instruction,
+            skillKey: s.skillKey,
+            agentId: s.agentId,
+            modelOverride: s.modelOverride,
+            timeoutSeconds: s.timeoutSeconds,
+          }))}
+          onClose={() => setSimulateOpen(false)}
+        />
       </DialogContent>
     </Dialog>
   );
