@@ -115,10 +115,20 @@ export function AgendaClientWrapper() {
   const [editingEvent, setEditingEvent] = useState<AgendaEventSummary | null>(null);
   const [editingFormData, setEditingFormData] = useState<Partial<AgendaEventFormData>>({});
 
-  // Recurring edit scope dialog
+  // Recurring edit scope dialog (used for modal saves)
   const [scopeDialogOpen, setScopeDialogOpen] = useState(false);
   const [pendingEditData, setPendingEditData] = useState<AgendaEventFormData | null>(null);
   const [pendingOccurrenceId, setPendingOccurrenceId] = useState<string | null>(null);
+
+  // Drag-drop pending state (used when moving a recurring event via drag)
+  type PendingDrop = {
+    eventId: string;
+    newDate: string;
+    newTime: string;
+    tz: string;
+    isRecurring: boolean;
+  };
+  const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
 
   // Load agents + processes ONCE when wrapper mounts (AbortController survives StrictMode remount)
   useEffect(() => {
@@ -187,7 +197,7 @@ export function AgendaClientWrapper() {
 
   const handleEventDrop = useCallback(async (eventId: string, newDate: string, newTime?: string) => {
     try {
-      // Fetch current event to get existing time + timezone
+      // Fetch current event to get timezone + recurrence
       const res = await fetch(`/api/agenda/events/${eventId}`, { cache: "reload" });
       const json = await res.json();
       if (!json.ok) return;
@@ -199,7 +209,6 @@ export function AgendaClientWrapper() {
       if (newTime) {
         timeToUse = newTime;
       } else {
-        // Extract current time from starts_at in the event's timezone
         const d = new Date(evt.starts_at);
         const fmt = new Intl.DateTimeFormat("en-CA", {
           timeZone: tz,
@@ -210,9 +219,16 @@ export function AgendaClientWrapper() {
         timeToUse = `${get("hour")}:${get("minute")}`;
       }
 
-      // Build new starts_at with new date and time
-      const newStartsAt = buildTzAwareISO(newDate, timeToUse, tz);
+      const isRecurring = evt.recurrence_rule && evt.recurrence_rule !== "null" && evt.recurrence_rule !== "none";
 
+      if (isRecurring) {
+        // Show dialog to ask user: move this occurrence only, or this and future
+        setPendingDrop({ eventId, newDate, newTime: timeToUse, tz, isRecurring: true });
+        return;
+      }
+
+      // Non-recurring: move directly
+      const newStartsAt = buildTzAwareISO(newDate, timeToUse, tz);
       const patchRes = await fetch(`/api/agenda/events/${eventId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -220,8 +236,7 @@ export function AgendaClientWrapper() {
       });
       const patchJson = await patchRes.json();
       if (patchJson.ok) {
-        toast.success(newTime ? `Event moved to ${newDate} ${newTime}` : "Event moved");
-        void document.dispatchEvent(new CustomEvent("agenda-refresh"));
+        toast.success(newTime ? `Event moved to ${newDate} ${timeToUse}` : "Event moved");
       } else {
         toast.error(patchJson.error ?? "Failed to move event");
       }
@@ -257,6 +272,71 @@ export function AgendaClientWrapper() {
     setScopeDialogOpen(false);
     setPendingEditData(null);
     setPendingOccurrenceId(null);
+  };
+
+  // Handle recurring drag-drop scope selection
+  const handleDropScopeSelect = async (scope: "single" | "this_and_future") => {
+    if (!pendingDrop) return;
+    const { eventId, newDate, newTime, tz } = pendingDrop;
+
+    try {
+      let occurrenceId: string | null = null;
+
+      if (scope === "single") {
+        // Find the occurrence matching the original (pre-move) date so the split point is correct
+        const occRes = await fetch(`/api/agenda/events/${eventId}`, { cache: "reload" });
+        const occJson = await occRes.json();
+        if (!occJson.ok) { toast.error("Failed to find occurrence"); return; }
+        const occurrences = occJson.occurrences ?? [];
+        // Match by scheduled_for date in the event's timezone
+        const matched = occurrences.find((o: { scheduled_for: string }) => {
+          const occDate = new Date(o.scheduled_for).toISOString().split("T")[0];
+          return occDate === newDate;
+        });
+        occurrenceId = matched?.id ?? null;
+      }
+
+      // For "this_and_future", we need the occurrence ID of the target date
+      if (scope === "this_and_future") {
+        const occRes = await fetch(`/api/agenda/events/${eventId}`, { cache: "reload" });
+        const occJson = await occRes.json();
+        if (!occJson.ok) { toast.error("Failed to find occurrence"); return; }
+        const occurrences = occJson.occurrences ?? [];
+        // Find occurrence for the new date
+        const matched = occurrences.find((o: { scheduled_for: string }) => {
+          const occDate = new Date(o.scheduled_for).toISOString().split("T")[0];
+          return occDate === newDate;
+        });
+        occurrenceId = matched?.id ?? null;
+      }
+
+      const newStartsAt = buildTzAwareISO(newDate, newTime, tz);
+      const patchBody: Record<string, unknown> = {
+        startsAt: newStartsAt,
+        editScope: scope,
+        occurrenceId,
+      };
+
+      const patchRes = await fetch(`/api/agenda/events/${eventId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patchBody),
+      });
+      const patchJson = await patchRes.json();
+      if (patchJson.ok) {
+        toast.success(
+          scope === "single"
+            ? `Moved only this occurrence to ${newDate} ${newTime}`
+            : `Moved this and all upcoming to ${newDate} ${newTime}`
+        );
+      } else {
+        toast.error(patchJson.error ?? "Failed to move event");
+      }
+    } catch {
+      toast.error("Failed to move event");
+    } finally {
+      setPendingDrop(null);
+    }
   };
 
   const saveEvent = async (
@@ -388,6 +468,7 @@ export function AgendaClientWrapper() {
         agents={agents}
         processes={processes}
         initialData={editingFormData}
+        isReadOnly={editingEvent?.latestResult === "succeeded"}
         onClose={() => {
           setEventModalOpen(false);
           setEditingEvent(null);
@@ -423,9 +504,9 @@ export function AgendaClientWrapper() {
               onClick={() => handleScopeSelect("single")}
             >
               <IconCalendarEvent className="size-5 text-muted-foreground shrink-0" />
-              <div>
-                <p className="font-semibold text-sm">Only this occurrence</p>
-                <p className="text-xs text-muted-foreground">
+              <div className="flex flex-col gap-0.5 items-start min-w-0">
+                <p className="font-semibold text-sm truncate w-full">Only this occurrence</p>
+                <p className="text-xs text-muted-foreground line-clamp-2">
                   Changes apply to this one instance only. Other occurrences stay the same.
                 </p>
               </div>
@@ -436,9 +517,9 @@ export function AgendaClientWrapper() {
               onClick={() => handleScopeSelect("this_and_future")}
             >
               <IconGitBranch className="size-5 text-primary shrink-0" />
-              <div>
-                <p className="font-semibold text-sm">This and all upcoming</p>
-                <p className="text-xs text-muted-foreground">
+              <div className="flex flex-col gap-0.5 items-start min-w-0">
+                <p className="font-semibold text-sm truncate w-full">This and all upcoming</p>
+                <p className="text-xs text-muted-foreground line-clamp-2">
                   This occurrence and all future ones change. Past occurrences are preserved.
                 </p>
               </div>
@@ -452,6 +533,57 @@ export function AgendaClientWrapper() {
                 setPendingOccurrenceId(null);
               }}
             >
+              Cancel
+            </AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Drag-drop recurring confirmation dialog */}
+      <AlertDialog
+        open={!!pendingDrop}
+        onOpenChange={(open: boolean) => { if (!open) setPendingDrop(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <IconGitBranch className="size-5 text-primary" />
+              Move — which occurrences?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-base">
+              You moved a recurring event. Choose whether to move only this specific occurrence or this and all upcoming ones.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex flex-col gap-3 mt-2">
+            <Button
+              variant="outline"
+              className="h-auto py-4 justify-start text-left gap-3 cursor-pointer"
+              onClick={() => handleDropScopeSelect("single")}
+            >
+              <IconCalendarEvent className="size-5 text-muted-foreground shrink-0" />
+              <div className="flex flex-col gap-0.5 items-start min-w-0">
+                <p className="font-semibold text-sm truncate w-full">Only this occurrence</p>
+                <p className="text-xs text-muted-foreground line-clamp-2">
+                  Move only the one you just dragged. Other occurrences stay on their original schedule.
+                </p>
+              </div>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-4 justify-start text-left gap-3 cursor-pointer"
+              onClick={() => handleDropScopeSelect("this_and_future")}
+            >
+              <IconGitBranch className="size-5 text-primary shrink-0" />
+              <div className="flex flex-col gap-0.5 items-start min-w-0">
+                <p className="font-semibold text-sm truncate w-full">This and all upcoming</p>
+                <p className="text-xs text-muted-foreground line-clamp-2">
+                  Move this occurrence and all future ones to the new time. Past occurrences are preserved.
+                </p>
+              </div>
+            </Button>
+          </div>
+          <AlertDialogFooter className="mt-2">
+            <AlertDialogCancel onClick={() => setPendingDrop(null)}>
               Cancel
             </AlertDialogCancel>
           </AlertDialogFooter>

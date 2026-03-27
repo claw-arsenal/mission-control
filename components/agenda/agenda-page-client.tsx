@@ -46,15 +46,24 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
     if (viewMode === "week") {
       const ws = startOfWeek(currentDate, { weekStartsOn: 1 });
       const we = endOfWeek(currentDate, { weekStartsOn: 1 });
+      // Add ±1 day buffer (same as month view) to handle timezone edge cases
+      // e.g. event at 23:04 CET on Mar 29 = 22:04 UTC on Mar 29, which might land
+      // just outside the raw week range in UTC terms
+      const bufferedWs = new Date(ws.getTime() - 86_400_000);
+      const bufferedWe = new Date(we.getTime() + 86_400_000);
       return {
-        rangeStart: format(ws, "yyyy-MM-dd"),
-        rangeEnd: format(we, "yyyy-MM-dd"),
+        rangeStart: format(bufferedWs, "yyyy-MM-dd"),
+        rangeEnd: format(bufferedWe, "yyyy-MM-dd"),
       };
     }
-    // day view
+    // day view — add ±1 day buffer for timezone safety (same as month/week)
+    const dayStart = startOfDay(currentDate);
+    const dayEnd = endOfDay(currentDate);
+    const bufferedDayStart = new Date(dayStart.getTime() - 86_400_000);
+    const bufferedDayEnd = new Date(dayEnd.getTime() + 86_400_000);
     return {
-      rangeStart: format(startOfDay(currentDate), "yyyy-MM-dd"),
-      rangeEnd: format(endOfDay(currentDate), "yyyy-MM-dd"),
+      rangeStart: format(bufferedDayStart, "yyyy-MM-dd"),
+      rangeEnd: format(bufferedDayEnd, "yyyy-MM-dd"),
     };
   }, [currentDate, viewMode]);
 
@@ -63,17 +72,11 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
     void loadEvents(rangeStart, rangeEnd);
   }, [rangeStart, rangeEnd, loadEvents]);
 
-  // External refresh events (after create/edit/delete)
-  useEffect(() => {
-    const handler = () => { void loadEvents(); void checkFailed(); };
-    document.addEventListener("agenda-refresh", handler);
-    return () => document.removeEventListener("agenda-refresh", handler);
-  }, [loadEvents]);
+  // Range ref so other dispatches (agenda-refresh) can use the current visible range
+  const rangeRef = useRef({ rangeStart, rangeEnd });
+  useEffect(() => { rangeRef.current = { rangeStart, rangeEnd }; }, [rangeStart, rangeEnd]);
 
-  // ── SSE: live updates via PostgreSQL LISTEN/NOTIFY ──────────────────────────
-  const sseRef = useRef<EventSource | null>(null);
-  const sseStartedRef = useRef(false);
-
+  // Check failed count (used by agenda-refresh and SSE)
   const checkFailed = useCallback(async () => {
     try {
       const res = await fetch("/api/agenda/failed", { cache: "reload" });
@@ -81,6 +84,23 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
       if (json.ok) setFailedCount((json.occurrences ?? []).length);
     } catch { /* ignore */ }
   }, []);
+
+  // External refresh events (after create/edit/delete) — always use current visible range
+  useEffect(() => {
+    const handler = () => {
+      const { rangeStart: rs, rangeEnd: re } = rangeRef.current;
+      void loadEvents(rs, re);
+      void checkFailed();
+    };
+    document.addEventListener("agenda-refresh", handler);
+    return () => document.removeEventListener("agenda-refresh", handler);
+  }, [loadEvents, checkFailed]);
+
+  // ── SSE: live updates via PostgreSQL LISTEN/NOTIFY ──────────────────────────
+  const sseRef = useRef<EventSource | null>(null);
+  const sseStartedRef = useRef(false);
+  const sseReconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFetchingRef = useRef(false);
 
   useEffect(() => {
     if (sseStartedRef.current) return;
@@ -93,16 +113,24 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
       const es = new EventSource("/api/agenda/events/stream");
       sseRef.current = es;
 
-      es.addEventListener("agenda_change", () => {
-        void loadEvents();
-        void checkFailed();
+      es.addEventListener("agenda_change", async () => {
+        if (isFetchingRef.current || !sseStartedRef.current) return;
+        isFetchingRef.current = true;
+        try {
+          // Use current visible range so the calendar stays stable during refetch
+          const { rangeStart, rangeEnd } = rangeRef.current;
+          await loadEvents(rangeStart, rangeEnd);
+        } catch { /* ignore */ } finally {
+          isFetchingRef.current = false;
+          void checkFailed();
+        }
       });
 
       es.onerror = () => {
-        // Auto-reconnect after 5s on error
+        if (sseReconnectTimer.current) clearTimeout(sseReconnectTimer.current);
         es.close();
         sseRef.current = null;
-        setTimeout(() => {
+        sseReconnectTimer.current = setTimeout(() => {
           if (sseStartedRef.current) connect();
         }, 5_000);
       };
@@ -112,10 +140,8 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
 
     return () => {
       sseStartedRef.current = false;
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
+      if (sseReconnectTimer.current) clearTimeout(sseReconnectTimer.current);
+      if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
     };
   }, [loadEvents, checkFailed]);
 

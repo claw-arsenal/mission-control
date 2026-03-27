@@ -37,6 +37,8 @@ import {
   IconShieldCheck,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { AgendaSimulateModal } from "@/components/agenda/agenda-simulate-modal";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -71,14 +73,15 @@ export type AgendaEventFormData = {
   fallbackModel: string;
 };
 
-type AgentOption = { id: string; name: string };
-type ProcessOption = { id: string; name: string; version_number: number };
+export type AgentOption = { id: string; name: string };
+export type ProcessOption = { id: string; name: string; version_number: number };
 
 type Props = {
   open: boolean;
   agents?: AgentOption[];
   processes?: ProcessOption[];
   initialData?: Partial<AgendaEventFormData>;
+  isReadOnly?: boolean;
   onClose: () => void;
   onSave: (data: AgendaEventFormData) => void;
 };
@@ -123,33 +126,31 @@ function getProviderLabel(modelId: string): string {
   return 'Other';
 }
 
-// ── Timezone abbreviation helper ─────────────────────────────────────────────
+const TIMEZONES = [
+  { value: "Europe/Amsterdam", label: "Europe/Amsterdam (CET)", abbr: "CET" },
+  { value: "Europe/London", label: "Europe/London (GMT)", abbr: "GMT" },
+  { value: "Europe/Berlin", label: "Europe/Berlin (CET)", abbr: "CET" },
+  { value: "Europe/Paris", label: "Europe/Paris (CET)", abbr: "CET" },
+  { value: "America/New_York", label: "America/New_York (EST)", abbr: "EST" },
+  { value: "America/Chicago", label: "America/Chicago (CST)", abbr: "CST" },
+  { value: "America/Los_Angeles", label: "America/Los_Angeles (PST)", abbr: "PST" },
+  { value: "Asia/Tokyo", label: "Asia/Tokyo (JST)", abbr: "JST" },
+  { value: "Asia/Dubai", label: "Asia/Dubai (GST)", abbr: "GST" },
+  { value: "UTC", label: "UTC", abbr: "UTC" },
+];
 
-function getTimezoneAbbr(timezone: string, date?: Date): string {
+// Get a clean timezone abbreviation (e.g. "CET", "GMT") for display
+function getTzAbbr(tz: string): string {
+  const entry = TIMEZONES.find((t) => t.value === tz);
+  if (entry) return entry.abbr;
   try {
-    const d = date || new Date();
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      timeZoneName: 'short',
-    }).formatToParts(d);
-    return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" })
+      .formatToParts(new Date());
+    return parts.find((p) => p.type === "timeZoneName")?.value ?? tz;
   } catch {
-    return '';
+    return tz;
   }
 }
-
-const TIMEZONES = [
-  { value: "Europe/Amsterdam", label: "Europe/Amsterdam (CET)" },
-  { value: "Europe/London", label: "Europe/London (GMT)" },
-  { value: "Europe/Berlin", label: "Europe/Berlin (CET)" },
-  { value: "Europe/Paris", label: "Europe/Paris (CET)" },
-  { value: "America/New_York", label: "America/New_York (EST)" },
-  { value: "America/Chicago", label: "America/Chicago (CST)" },
-  { value: "America/Los_Angeles", label: "America/Los_Angeles (PST)" },
-  { value: "Asia/Tokyo", label: "Asia/Tokyo (JST)" },
-  { value: "Asia/Dubai", label: "Asia/Dubai (GST)" },
-  { value: "UTC", label: "UTC" },
-];
 
 const WEEKDAYS = [
   { value: "1", label: "Mon" },
@@ -329,11 +330,12 @@ function StepIndicator({ currentStep, onStepClick, canReach }: { currentStep: nu
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPTY_PROCESSES, initialData, onClose, onSave }: Props) {
+export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPTY_PROCESSES, initialData, isReadOnly, onClose, onSave }: Props) {
   const isEditing = !!initialData?.title;
   const [form, setForm] = useState<AgendaEventFormData>(initialData ? buildInitialForm(initialData) : defaultForm);
   const [error, setError] = useState("");
   const [step, setStep] = useState(0);
+  const [simulateOpen, setSimulateOpen] = useState(false);
 
   const initialDataRef = useRef(initialData);
   useEffect(() => {
@@ -893,7 +895,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           {form.taskType === "one_time" ? (
             <>
               <ReviewRow label="Date" value={form.startDate || "—"} />
-              <ReviewRow label="Time" value={form.startTime ? `${form.startTime} ${getTimezoneAbbr(form.timezone)}` : "—"} />
+              <ReviewRow label="Time" value={form.startTime ? `${form.startTime} ${getTzAbbr(form.timezone)}` : "—"} />
             </>
           ) : (
             <>
@@ -901,7 +903,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
               {form.frequency === "weekly" && weekdayLabels && (
                 <ReviewRow label="Days" value={weekdayLabels} />
               )}
-              <ReviewRow label="Time" value={form.startTime ? `${form.startTime} ${getTimezoneAbbr(form.timezone)}` : "—"} />
+              <ReviewRow label="Time" value={form.startTime ? `${form.startTime} ${getTzAbbr(form.timezone)}` : "—"} />
               <ReviewRow label="Starts" value={form.startDateMode === "now" ? "Immediately" : (form.startDate || "—")} />
               <ReviewRow label="Ends" value={form.endDateMode === "forever" ? "Runs forever" : (form.endDate || "—")} />
             </>
@@ -910,6 +912,19 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           <ReviewRow label="Timezone" value={form.timezone} />
           {/* executionWindowMinutes uses global default from settings */}
           {form.fallbackModel && <ReviewRow label="Fallback" value={MODELS.find((m) => m.id === form.fallbackModel)?.alias || form.fallbackModel} />}
+
+          {/* Simulate section — only show if there's something to simulate */}
+          {(form.freePrompt || form.processVersionIds.length > 0) && (
+            <div className="p-3">
+              <AgendaSimulateModal
+                open={simulateOpen}
+                formData={form}
+                agents={agents}
+                processes={processes}
+                onClose={() => setSimulateOpen(false)}
+              />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -985,10 +1000,27 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                   <IconChevronRight className="size-3.5" />
                 </Button>
               ) : (
-                <Button onClick={handleSave} className="gap-1.5 cursor-pointer">
-                  <IconCalendarPlus className="size-3.5" />
-                  {isEditing ? "Save changes" : "Create event"}
-                </Button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span>
+                        <Button
+                          onClick={handleSave}
+                          disabled={isReadOnly}
+                          className="gap-1.5 cursor-pointer"
+                        >
+                          <IconCalendarPlus className="size-3.5" />
+                          {isEditing ? "Save changes" : "Create event"}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {isReadOnly && (
+                      <TooltipContent side="top" className="max-w-xs text-left">
+                        This event has already finished. Copy the details to create a new event instead.
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
               )}
             </div>
           </div>

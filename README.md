@@ -5,15 +5,15 @@ Local-first dashboard for OpenClaw — boards, agent scheduling, real-time logs,
 ## Quick Start
 
 ```bash
-# 1. Install (clone + DB + build)
-bash scripts/install.sh
+# Install (clone + env + DB + build — everything in one command)
+curl -fsSL https://github.com/kenandevx/mission-control/main/install.sh | bash
 
-# 2. Development
+# Development
 npm run dev            # Start DB + all services + Next.js dev server
 npm run dev:stop       # Stop DB + services (graceful)
 npm run dev:kill       # Force-kill everything (zombie processes, stuck ports)
 
-# 3. Production
+# Production
 npm run build
 bash scripts/mc-services.sh start    # Starts all services including Next.js
 ```

@@ -166,6 +166,9 @@ export async function GET(request: Request) {
               starts_at: correctedOcc.toISOString(),
               ends_at: endsAt,
               _occurrenceDate: correctedDate,
+              // Preserve the intended local time for display, even across DST gaps
+              // (e.g. 02:08 CET doesn't exist on spring-forward day, but we still want to show "02:08")
+              _intendedLocalTime: localTime,
             });
           }
         } catch {
@@ -180,23 +183,29 @@ export async function GET(request: Request) {
       if (expandedIds.length > 0) {
         if (recurringEventIds.length > 0) {
           // For recurring: fetch ALL occurrences with run timing and match by scheduled_for date
+          // Join agenda_events to get timezone for CET-date key computation
           const allOccRows = await sql`
             select ao.agenda_event_id, ao.scheduled_for, ao.status,
-                   ra.started_at as run_started_at, ra.finished_at as run_finished_at
+                   ra.started_at as run_started_at, ra.finished_at as run_finished_at,
+                   ae.timezone as event_timezone
             from agenda_occurrences ao
             left join agenda_run_attempts ra
               on ra.occurrence_id = ao.id and ra.attempt_no = ao.latest_attempt_no
+            join agenda_events ae on ae.id = ao.agenda_event_id
             where ao.agenda_event_id = ANY(${recurringEventIds})
           `;
           // Build maps: eventId+date → status, eventId+date → timing
+          // Use the EVENT's timezone (not UTC) for the date key so it matches _occurrenceDate
           const occDateMap = new Map<string, string>();
           const occTimingMap = new Map<string, { run_started_at: string | null; run_finished_at: string | null }>();
           for (const r of allOccRows) {
-            const dateKey = new Date(r.scheduled_for).toISOString().split("T")[0];
+            const tz = (r as Record<string, unknown>).event_timezone as string ?? "UTC";
+            const dateKey = extractLocalTime(new Date(r.scheduled_for), tz).date;
             const key = `${r.agenda_event_id}:${dateKey}`;
             occDateMap.set(key, r.status);
             occTimingMap.set(key, { run_started_at: r.run_started_at, run_finished_at: r.run_finished_at });
           }
+          // Augment each expanded recurring occurrence with its own occurrence status
           for (const e of expanded) {
             const eid = (e as Record<string, unknown>).id as string;
             if (recurringEventIds.includes(eid)) {
