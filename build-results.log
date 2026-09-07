@@ -1,0 +1,96 @@
+▲ Next.js 16.3.4 (Turbopack)
+✓ Running next.config.mjs took 52ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 9.7s
+  Running TypeScript ...
+  Finished TypeScript in 9.2s ...
+  Collecting page data using 15 workers ...
+  Generating static pages using 15 workers (0/28) ...
+  Generating static pages using 15 workers (7/28) 
+  Generating static pages using 15 workers (14/28) 
+  Generating static pages using 15 workers (21/28) 
+✓ Generating static pages using 15 workers (28/28) in 583ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /agenda
+├ ƒ /agents
+├ ƒ /agents/[agentId]
+├ ƒ /api/agenda/artifacts/[stepId]/[filename]
+├ ƒ /api/agenda/chats
+├ ƒ /api/agenda/debug/render-template
+├ ƒ /api/agenda/debug/run-steps
+├ ƒ /api/agenda/events
+├ ƒ /api/agenda/events/[id]
+├ ƒ /api/agenda/events/[id]/occurrences/[occurrenceId]
+├ ƒ /api/agenda/events/[id]/occurrences/[occurrenceId]/runs
+├ ƒ /api/agenda/events/stream
+├ ƒ /api/agenda/failed
+├ ƒ /api/agenda/logs
+├ ƒ /api/agenda/settings
+├ ƒ /api/agenda/stats
+├ ƒ /api/agent/logs
+├ ƒ /api/agent/logs/stream
+├ ƒ /api/agents
+├ ƒ /api/auth/config
+├ ƒ /api/auth/session
+├ ƒ /api/documents
+├ ƒ /api/documents/content
+├ ƒ /api/events
+├ ƒ /api/file-manager/[[...path]]
+├ ƒ /api/files
+├ ƒ /api/metrics
+├ ƒ /api/metrics/health
+├ ƒ /api/mobile-apps
+├ ƒ /api/mobile-apps/[id]
+├ ƒ /api/mobile-apps/[id]/digest
+├ ƒ /api/mobile-apps/[id]/ensure-fresh
+├ ƒ /api/mobile-apps/[id]/reviews
+├ ƒ /api/mobile-apps/config-status
+├ ƒ /api/mobile-apps/reports/status
+├ ƒ /api/mobile-apps/reports/sync
+├ ƒ /api/mobile-apps/stream
+├ ƒ /api/mobile-apps/sync
+├ ƒ /api/mobile-apps/translate
+├ ƒ /api/models
+├ ƒ /api/modules
+├ ƒ /api/notifications
+├ ƒ /api/notifications/inbox
+├ ƒ /api/notifications/recent
+├ ƒ /api/notifications/stream
+├ ƒ /api/processes
+├ ƒ /api/processes/[id]
+├ ƒ /api/processes/simulate
+├ ƒ /api/processes/simulate/cleanup
+├ ƒ /api/queues
+├ ƒ /api/services
+├ ƒ /api/setup
+├ ƒ /api/skills
+├ ƒ /api/system
+├ ƒ /api/tasks
+├ ƒ /api/tasks/worker-metrics
+├ ƒ /api/users
+├ ○ /approvals
+├ ƒ /boards
+├ ƒ /dashboard
+├ ƒ /documents
+├ ƒ /file-manager
+├ ƒ /health
+├ ○ /login
+├ ƒ /logs
+├ ƒ /metrics
+├ ƒ /mobile-apps
+├ ƒ /mobile-apps/[id]
+├ ƒ /processes
+├ ƒ /settings
+└ ○ /setup
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

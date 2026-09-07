@@ -65,6 +65,7 @@ type Props = {
 };
 
 const SORT_LABELS: Record<SortMode, string> = {
+  manual: "Manual order",
   newest: "Newest first",
   oldest: "Oldest first",
   dueDate: "Due date",
@@ -353,7 +354,7 @@ export function WorkspaceToolbar({
             value={tasks.sort}
             onValueChange={(v) => tasks.setSort(v as SortMode)}
           >
-            {(["newest", "oldest", "dueDate", "title"] as SortMode[]).map((key) => (
+            {(["manual", "newest", "oldest", "dueDate", "title"] as SortMode[]).map((key) => (
               <DropdownMenuRadioItem key={key} value={key}>
                 {SORT_LABELS[key]}
               </DropdownMenuRadioItem>

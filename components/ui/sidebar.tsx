@@ -144,6 +144,7 @@ function SidebarProvider({
           )}
           {...props}
         >
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-background focus:px-4 focus:py-3 focus:text-foreground focus:shadow-md focus:outline-2 focus:outline-ring">Skip to content</a>
           {children}
         </div>
       </TooltipProvider>
@@ -306,7 +307,9 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
 
 function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
-    <main
+      <main
+        id="main-content"
+        tabIndex={-1}
       data-slot="sidebar-inset"
       className={cn(
         "relative flex w-full flex-1 flex-col bg-background",

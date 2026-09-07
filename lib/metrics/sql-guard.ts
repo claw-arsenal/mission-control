@@ -24,6 +24,8 @@ const FORBIDDEN_KEYWORDS = new Set([
   "LOCK", "UNLOCK",
   "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "START",
   "CHANGE",
+  "INTO", "OUTFILE", "DUMPFILE", "LOAD_FILE", "SLEEP", "BENCHMARK",
+  "GET_LOCK", "RELEASE_LOCK", "RELEASE_ALL_LOCKS",
 ]);
 
 // Allowed starting keywords for a saved metric query.
@@ -37,7 +39,7 @@ export type GuardResult =
  * Strip line and block comments. Returns the cleaned SQL.
  * Honestly counts double-dash line comments and slash-star blocks.
  */
-function stripComments(sql: string): string {
+export function stripComments(sql: string): string {
   let out = "";
   let i = 0;
   while (i < sql.length) {
@@ -203,7 +205,7 @@ export function bindNamedParams(
     }
     // Match :identifier (but NOT :: which is Postgres cast syntax — for MySQL
     // it's unlikely to appear, but be safe.)
-    if (c === ":" && sql[i + 1] !== ":" && /[A-Za-z_]/.test(sql[i + 1] || "")) {
+    if (c === ":" && !/[:\w]/.test(sql[i - 1] || "") && sql[i + 1] !== ":" && /[A-Za-z_]/.test(sql[i + 1] || "")) {
       let j = i + 1;
       while (j < sql.length && /[A-Za-z0-9_]/.test(sql[j])) j++;
       const name = sql.slice(i + 1, j);

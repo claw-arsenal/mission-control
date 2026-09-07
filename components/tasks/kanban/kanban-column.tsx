@@ -22,6 +22,7 @@ type Props = {
   assigneeById: Record<string, Assignee>;
   labelById?: Record<string, import("@/types/tasks").Label>;
   isActive?: boolean;
+  ticketDraggingDisabled?: boolean;
   onAddTask: () => void;
   canDeleteList: boolean;
   onDeleteList: () => void;
@@ -51,6 +52,7 @@ export function KanbanColumn({
   assigneeById,
   labelById,
   isActive,
+  ticketDraggingDisabled,
   onAddTask,
   canDeleteList,
   onDeleteList,
@@ -87,15 +89,13 @@ export function KanbanColumn({
     >
       {/* Header — drag handle for column */}
       <div
-        {...attributes}
-        {...listeners}
         className={cn(
           "flex items-center gap-2 px-3 py-2.5 cursor-grab active:cursor-grabbing select-none border-b",
           columnHeaderToneClass[column.tone],
         )}
       >
         <span className={cn("h-2 w-2 rounded-full shrink-0", toneColor[column.tone])} />
-        <span className="flex-1 text-sm font-semibold text-foreground truncate">{column.title}</span>
+        <button type="button" {...attributes} {...listeners} aria-label={`Move list ${column.title}`} className="flex-1 min-w-0 truncate rounded text-left text-sm font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-ring touch-none">{column.title}</button>
         <span className="text-xs text-muted-foreground tabular-nums">{tickets.length}</span>
         <div
           onPointerDown={(e) => e.stopPropagation()}
@@ -103,7 +103,7 @@ export function KanbanColumn({
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-6 w-6">
+              <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for ${column.title}`}>
                 <KebabIcon />
               </Button>
             </DropdownMenuTrigger>
@@ -143,6 +143,7 @@ export function KanbanColumn({
                   onClick={() => onTicketClick(ticket.id)}
                   onCopy={() => onTicketCopy(ticket.id)}
                   onDelete={() => onTicketDelete(ticket.id)}
+                  disabled={ticketDraggingDisabled}
                 />
               ))
             )}
@@ -173,6 +174,7 @@ function SortableTicket({
   onClick,
   onCopy,
   onDelete,
+  disabled,
 }: {
   ticket: Ticket;
   assigneeById: Record<string, Assignee>;
@@ -180,15 +182,17 @@ function SortableTicket({
   onClick: () => void;
   onCopy: () => void;
   onDelete: () => void;
+  disabled?: boolean;
 }) {
   const {
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: ticket.id, data: { type: "ticket", columnId: ticket.statusId } });
+  } = useSortable({ id: ticket.id, disabled, data: { type: "ticket", columnId: ticket.statusId } });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -199,8 +203,6 @@ function SortableTicket({
     <div
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
       className={cn(isDragging && "opacity-0")}
     >
       <TicketCard
@@ -211,6 +213,7 @@ function SortableTicket({
         onCopy={onCopy}
         onDelete={onDelete}
         isDragging={isDragging}
+        dragHandleProps={disabled ? undefined : { ...attributes, ...listeners, ref: setActivatorNodeRef }}
       />
     </div>
   );

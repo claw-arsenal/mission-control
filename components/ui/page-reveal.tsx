@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { ContainerLoader } from "@/components/ui/container-loader";
 
 type PageRevealProps = {
@@ -12,8 +12,10 @@ type PageRevealProps = {
   label?: string;
 };
 
-export function PageReveal({ children, className, delayMs = 200, label = "Loading…" }: PageRevealProps) {
-  const [ready, setReady] = useState(false);
+export function PageReveal({ children, className, delayMs = 0, label = "Loading…" }: PageRevealProps) {
+  const [ready, setReady] = useState(delayMs <= 0);
+  const reduceMotion = useReducedMotion();
+  const visible = ready || reduceMotion;
 
   useEffect(() => {
     const t = setTimeout(() => setReady(true), delayMs);
@@ -24,13 +26,13 @@ export function PageReveal({ children, className, delayMs = 200, label = "Loadin
     <div className="relative">
       <motion.div
         className={className}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: ready ? 1 : 0 }}
-        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        initial={false}
+        animate={{ opacity: visible ? 1 : 0 }}
+        transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
       >
         {children}
       </motion.div>
-      {!ready ? <ContainerLoader label={label} /> : null}
+      {!visible ? <ContainerLoader label={label} /> : null}
     </div>
   );
 }

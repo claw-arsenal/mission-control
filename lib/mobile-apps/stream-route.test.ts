@@ -4,14 +4,15 @@ vi.mock("@/lib/auth/session", () => ({ getSession: vi.fn() }));
 vi.mock("@/lib/modules/state", () => ({ isModuleEnabled: vi.fn() }));
 vi.mock("@/lib/local-db", () => ({ getSql: vi.fn(() => () => Promise.resolve([])) }));
 
+import { getSql } from "@/lib/local-db";
 import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
 import { GET } from "@/app/api/mobile-apps/stream/route";
 
 const req = () => new Request("http://localhost/api/mobile-apps/stream");
 
-beforeEach(() => vi.mocked(isModuleEnabled).mockResolvedValue(true));
-afterEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.mocked(isModuleEnabled).mockResolvedValue(true); vi.mocked(getSession).mockResolvedValue({ sub: "fixture", name: "Fixture", email: "fixture@example.com" }); });
+afterEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
 
 describe("SSE /api/mobile-apps/stream auth gate", () => {
   it("rejects unauthenticated requests with 401 (no open DB LISTEN)", async () => {
@@ -26,4 +27,22 @@ describe("SSE /api/mobile-apps/stream auth gate", () => {
     const res = await GET(req());
     expect(res.status).toBe(503);
   });
+});
+
+it("coalesces a review burst and releases its listener on disconnect", async () => {
+  vi.useFakeTimers();
+  let notify!: (payload: string) => void;
+  const unlisten = vi.fn().mockResolvedValue(undefined);
+  vi.mocked(getSql).mockReturnValue({ listen: vi.fn(async (_channel, callback) => { notify = callback; return { unlisten }; }) } as unknown as ReturnType<typeof getSql>);
+  const controller = new AbortController();
+  const response = await GET(new Request('http://localhost/api/mobile-apps/stream', { signal: controller.signal }));
+  const reader = response.body!.getReader();
+  await reader.read();
+  for (let i = 0; i < 100; i++) notify('{"appId":"fixture"}');
+  await vi.advanceTimersByTimeAsync(500);
+  const chunk = new TextDecoder().decode((await reader.read()).value);
+  expect(chunk).toBe('event: change\ndata: {"appId":"fixture"}\n\n');
+  controller.abort();
+  expect((await reader.read()).done).toBe(true);
+  expect(unlisten).toHaveBeenCalledTimes(1);
 });

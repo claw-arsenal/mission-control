@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { type Assignee, type Label, type Ticket, formatDue } from "@/types/tasks";
 import { cn } from "@/lib/utils";
+import { GripVerticalIcon } from "lucide-react";
 
 type Props = {
   ticket: Ticket;
@@ -21,7 +22,7 @@ type Props = {
   onCopy?: () => void;
   onDelete?: () => void;
   dense?: boolean;
-  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
+  dragHandleProps?: React.ComponentProps<"button">;
   isDragging?: boolean;
 };
 
@@ -30,13 +31,6 @@ const priorityConfig: Record<Ticket["priority"], { dot: string; label: string; b
   medium: { dot: "bg-amber-500",   label: "text-amber-600 dark:text-amber-400",   bar: "bg-amber-500"   },
   high:   { dot: "bg-orange-500",  label: "text-orange-600 dark:text-orange-400",  bar: "bg-orange-500"  },
   urgent: { dot: "bg-rose-600",    label: "text-rose-600 dark:text-rose-400",      bar: "bg-rose-600"    },
-};
-
-const priorityBorderAccent: Record<Ticket["priority"], string> = {
-  low:    "border-l-emerald-500/50",
-  medium: "border-l-amber-500/50",
-  high:   "border-l-orange-500/50",
-  urgent: "border-l-rose-600/70",
 };
 
 const priorityLabel = (p: Ticket["priority"]) => p.charAt(0).toUpperCase() + p.slice(1);
@@ -72,14 +66,11 @@ export function TicketCard({
     <Card
       className={cn(
         "group cursor-pointer select-none border-border/60 bg-card py-0",
-        "border-l-[3px]",
-        priorityBorderAccent[ticket.priority],
         "transition-[transform,box-shadow,opacity] duration-150",
         "hover:-translate-y-0.5 hover:shadow-md hover:border-border",
         isDragging && "opacity-40 shadow-2xl rotate-1",
       )}
       onClick={onClick}
-      {...dragHandleProps}
     >
       <CardContent className={cn("flex flex-col gap-2", dense ? "p-2.5" : "p-3.5")}>
         {/* Label chips strip */}
@@ -122,15 +113,18 @@ export function TicketCard({
           <div
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="shrink-0"
+            className="flex shrink-0 items-center"
           >
+            {dragHandleProps && <Button variant="ghost" size="icon" className="h-7 w-7 cursor-grab touch-none text-muted-foreground active:cursor-grabbing" {...dragHandleProps} aria-label={`Move ${ticket.title}`}>
+              <GripVerticalIcon className="size-3.5" />
+            </Button>}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-5 w-5 opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity"
-                  aria-label="Ticket actions"
+                  className="h-7 w-7 text-muted-foreground"
+                  aria-label={`Actions for ${ticket.title}`}
                 >
                   <KebabIcon />
                 </Button>
@@ -149,13 +143,13 @@ export function TicketCard({
         </div>
 
         {/* Title */}
-        <p className="text-sm font-semibold leading-snug line-clamp-2 text-foreground/90">
+        <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClick(); }} className="rounded text-left text-sm font-semibold leading-snug line-clamp-2 break-words text-foreground focus-visible:outline-2 focus-visible:outline-ring">
           {ticket.title}
-        </p>
+        </button>
 
         {/* Description preview */}
         {!dense && descPreview && (
-          <p className="text-xs leading-relaxed text-muted-foreground/70 line-clamp-2">
+          <p className="text-xs leading-relaxed text-muted-foreground line-clamp-2 break-words">
             {descPreview}
           </p>
         )}

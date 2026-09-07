@@ -17,10 +17,8 @@ import { TicketDetailsModal } from "@/components/tasks/modals/ticket-details-mod
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -56,7 +54,6 @@ import {
   MoreHorizontalIcon,
   PlusIcon,
   SearchIcon,
-  SlidersHorizontalIcon,
   Trash2Icon,
   LayoutGridIcon,
 } from "lucide-react";
@@ -88,6 +85,7 @@ const formatDateTimeUTC = (value: string | number | null | undefined): string =>
 };
 
 const SORT_OPTIONS: Array<{ key: SortMode; label: string }> = [
+  { key: "manual", label: "Manual order" },
   { key: "newest", label: "Newest" },
   { key: "oldest", label: "Oldest" },
   { key: "dueDate", label: "Due date" },
@@ -505,6 +503,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                 <Input
                   className="h-9 pl-9 pr-3 text-sm"
                   placeholder={workspaceOpen ? "Search tickets..." : "Search boards..."}
+                  aria-label={workspaceOpen ? "Search tickets" : "Search boards"}
                   value={workspaceOpen ? tasks.searchInput : boardSearch}
                   onChange={(event) => {
                     if (workspaceOpen) {
@@ -665,7 +664,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                         onClick={() => openBoardWorkspace(board.id)}
                       >
                         <TableCell className="font-medium">
-                          <span className="truncate">{board.name}</span>
+                          <button type="button" className="max-w-full truncate rounded text-left hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={(event) => { event.stopPropagation(); openBoardWorkspace(board.id); }}>{board.name}</button>
                         </TableCell>
                         <TableCell className="max-w-[360px]">
                           <p className="truncate text-sm text-muted-foreground">
@@ -779,6 +778,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                       onTicketDelete={tasks.handleDeleteTicket}
                       moveColumn={tasks.moveColumn}
                       moveTicket={tasks.moveTicket}
+                      ticketDraggingDisabled={tasks.sort !== "manual"}
                     />
                   )}
                   {tasks.view === "list" && (

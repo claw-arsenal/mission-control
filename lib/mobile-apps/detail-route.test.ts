@@ -6,7 +6,7 @@ vi.mock("@/lib/mobile-apps/ensure-schema", () => ({ ensureMobileAppsSchema: vi.f
 vi.mock("@/lib/local-db", () => ({ getSql: vi.fn() }));
 vi.mock("@/lib/mobile-apps/config", () => ({ loadMobileReviewsConfig: vi.fn(() => ({ sync: { negativeThreshold: 3 } })) }));
 vi.mock("@/lib/mobile-apps/report-rollups", () => ({ readReportRollups: vi.fn(async () => []), readLatestBreakdowns: vi.fn(async () => []) }));
-vi.mock("@/lib/mobile-apps/report-freshness", () => ({ checkOfficialReportFreshness: vi.fn(), readStoredFreshness: vi.fn(async () => []) }));
+vi.mock("@/lib/mobile-apps/report-freshness", async (importOriginal) => ({ ...await importOriginal<typeof import("./report-freshness")>(), checkOfficialReportFreshness: vi.fn(), readStoredFreshness: vi.fn(async () => []) }));
 vi.mock("@/lib/mobile-apps/report-jobs", () => ({ enqueueReportSyncJob: vi.fn() }));
 
 import { getSession } from "@/lib/auth/session";

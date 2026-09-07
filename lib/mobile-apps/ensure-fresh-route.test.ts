@@ -5,7 +5,8 @@ vi.mock("@/lib/modules/state", () => ({ isModuleEnabled: vi.fn() }));
 vi.mock("@/lib/mobile-apps/ensure-schema", () => ({ ensureMobileAppsSchema: vi.fn(async () => {}) }));
 vi.mock("@/lib/local-db", () => ({ getSql: vi.fn() }));
 vi.mock("@/lib/mobile-apps/sync", () => ({ syncApp: vi.fn(async () => []) }));
-vi.mock("@/lib/mobile-apps/report-freshness", () => ({
+vi.mock("@/lib/mobile-apps/report-freshness", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./report-freshness")>(),
   checkOfficialReportFreshness: vi.fn(),
   readStoredFreshness: vi.fn(async () => []),
 }));
@@ -54,6 +55,21 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("POST /api/mobile-apps/[id]/ensure-fresh", () => {
+  it.each(["unknown", "not_configured"])("strict never calls %s reports fresh", async (status) => {
+    vi.mocked(checkOfficialReportFreshness).mockResolvedValue({ ...fresh, status } as never);
+    const res = await POST(req({ consistency: "strict" }), { params });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ fresh: false, status });
+    expect(enqueueReportSyncJob).not.toHaveBeenCalled();
+  });
+
+  it("strict surfaces a live-source failure even when reports are fresh", async () => {
+    vi.mocked(checkOfficialReportFreshness).mockResolvedValue(fresh as never);
+    vi.mocked(syncApp).mockResolvedValueOnce([{ status: "failed", error: "Store unavailable" }] as never);
+    const res = await POST(req({ consistency: "strict" }), { params });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ fresh: false, liveFresh: false });
+  });
   it("always runs a LIGHT sync (never heavy report flags)", async () => {
     vi.mocked(checkOfficialReportFreshness).mockResolvedValue(fresh as never);
     await POST(req({ consistency: "available" }), { params });

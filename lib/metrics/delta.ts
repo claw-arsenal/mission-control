@@ -9,22 +9,17 @@
  */
 
 import type { WindowName } from "@/lib/metrics/window";
+import { metricNumber } from "./presentation";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function toNum(v: unknown): number {
-  if (typeof v === "number") return v;
-  if (typeof v === "bigint") return Number(v);
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
-  return 0;
-}
 
 /** Parse a raw DB datetime string ("YYYY-MM-DD HH:MM:SS") as local wall-clock. */
 export function parseDbDateTime(s: string | null | undefined): Date | null {
   if (!s) return null;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+    const date = new Date(s);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
   const m = String(s).trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (!m) {
     const d = new Date(s);
@@ -137,8 +132,8 @@ export function computeBucketDelta(opts: {
   if (!Array.isArray(rows) || rows.length < 2) return null;
 
   const parsed = rows
-    .map((r) => ({ label: String(r[xColumn] ?? ""), start: parseBucketStart(String(r[xColumn] ?? ""), window), value: toNum(r[yColumn]) }))
-    .filter((p): p is { label: string; start: Date; value: number } => p.start != null)
+    .map((r) => ({ label: String(r[xColumn] ?? ""), start: parseBucketStart(String(r[xColumn] ?? ""), window), value: metricNumber(r[yColumn]) }))
+    .filter((p): p is { label: string; start: Date; value: number | null } => p.start != null)
     .sort((a, b) => a.start.getTime() - b.start.getTime());
   if (parsed.length < 2) return null;
 
@@ -152,6 +147,8 @@ export function computeBucketDelta(opts: {
 
   const cur = complete[complete.length - 1];
   const prev = complete[complete.length - 2];
+  if (cur.value === null || prev.value === null) return null;
+  if (bucketEnd(prev.start, window).getTime() !== cur.start.getTime()) return null;
   return {
     current: cur.value,
     previous: prev.value,

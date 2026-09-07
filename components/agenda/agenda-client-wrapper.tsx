@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { format } from "date-fns";
+import { parseRecurrenceRule, toRecurrenceRule } from "@/lib/agenda/recurrence";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,26 +49,13 @@ function ymdInTimezone(value: string | Date, timezone: string): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-function toRecurrenceRule(recurrence: AgendaEventFormData["recurrence"], weekdays: string[]): string | null {
-  if (recurrence === "none") return null;
-  if (recurrence === "daily") return "FREQ=DAILY";
-  if (recurrence === "weekly") {
-    const days = weekdays.length > 0
-      ? weekdays.sort().map((d) => ["SU","MO","TU","WE","TH","FR","SA"][Number(d)]).join(",")
-      : "MO";
-    return `FREQ=WEEKLY;BYDAY=${days}`;
-  }
-  if (recurrence === "monthly") return "FREQ=MONTHLY";
-  return null;
-}
-
 function buildFormFromEvent(event: AgendaEventSummary): Partial<AgendaEventFormData> {
   const recurrence = (event.recurrence as AgendaEventFormData["recurrence"]) ?? "none";
 
   // Derive taskType and frequency from recurrence
   let taskType: "one_time" | "repeatable" = "one_time";
-  let frequency: "daily" | "weekly" = "daily";
-  if (recurrence === "daily" || recurrence === "weekly") {
+  let frequency: AgendaEventFormData["frequency"] = "daily";
+  if (recurrence === "daily" || recurrence === "weekly" || recurrence === "monthly") {
     taskType = "repeatable";
     frequency = recurrence;
   }
@@ -86,6 +75,10 @@ function buildFormFromEvent(event: AgendaEventSummary): Partial<AgendaEventFormD
     endTime: event.endTime ?? "",
     timezone: event.timezone ?? "Europe/Amsterdam",
     recurrence,
+    recurrenceRule: event.recurrenceRule,
+    weekdays: parseRecurrenceRule(event.recurrenceRule).weekdays,
+    recurrenceUntil: event.recurrenceUntil ?? "",
+    executionWindowMinutes: event.executionWindowMinutes ?? 30,
     taskType,
     frequency,
     startDateMode,
@@ -115,6 +108,8 @@ export function AgendaClientWrapper() {
   const [scopeDialogOpen, setScopeDialogOpen] = useState(false);
   const [pendingEditData, setPendingEditData] = useState<AgendaEventFormData | null>(null);
   const [pendingOccurrenceId, setPendingOccurrenceId] = useState<string | null>(null);
+  const [savingScope, setSavingScope] = useState(false);
+  const savingScopeRef = useRef(false);
 
   // Drag-drop pending state (used when moving a recurring event via drag)
   type PendingDrop = {
@@ -229,7 +224,7 @@ export function AgendaClientWrapper() {
   const handleDayClick = useCallback((date: Date) => {
     void loadProcessOptions();
     void loadAllEventsForPicker();
-    const dateStr = date.toISOString().split("T")[0]; // yyyy-MM-dd
+    const dateStr = format(date, "yyyy-MM-dd");
     setEditingEvent(null);
     setEditingFormData({ startDate: dateStr });
     setEventModalOpen(true);
@@ -277,6 +272,7 @@ export function AgendaClientWrapper() {
       const patchJson = await patchRes.json();
       if (patchJson.ok) {
         toast.success(newTime ? `Event moved to ${newDate} ${timeToUse}` : "Event moved");
+        document.dispatchEvent(new Event("agenda-refresh"));
       } else {
         toast.error(patchJson.error ?? "Failed to move event");
       }
@@ -292,27 +288,45 @@ export function AgendaClientWrapper() {
     setEventModalOpen(true);
   }, [loadProcessOptions]);
 
-  const handleModalSave = (data: AgendaEventFormData) => {
-    const isRecurring = data.recurrence !== "none" && editingEvent && editingEvent.recurrence !== "none";
+  const handleModalSave = async (data: AgendaEventFormData) => {
+    const isRecurring = editingEvent && editingEvent.recurrence !== "none";
 
     if (editingEvent && isRecurring) {
       setPendingEditData(data);
+      setEditingFormData(data);
       setPendingOccurrenceId(editingEvent.occurrenceId ?? null);
       setScopeDialogOpen(true);
       setEventModalOpen(false);
       return;
     }
 
-    saveEvent(data, null, null);
+    await saveEvent(data, null, null);
     setEventModalOpen(false);
   };
 
-  const handleScopeSelect = (scope: "single" | "this_and_future") => {
-    if (!pendingEditData) return;
-    saveEvent(pendingEditData, scope, pendingOccurrenceId);
+  const handleScopeSelect = async (scope: "single" | "this_and_future") => {
+    if (!pendingEditData || savingScopeRef.current) return;
+    savingScopeRef.current = true;
+    setSavingScope(true);
+    try {
+      await saveEvent(pendingEditData, scope, pendingOccurrenceId);
+      setScopeDialogOpen(false);
+      setPendingEditData(null);
+      setPendingOccurrenceId(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save event");
+    } finally {
+      savingScopeRef.current = false;
+      setSavingScope(false);
+    }
+  };
+
+  const returnToEditor = () => {
+    if (savingScopeRef.current) return;
     setScopeDialogOpen(false);
     setPendingEditData(null);
     setPendingOccurrenceId(null);
+    setEventModalOpen(true);
   };
 
   // Handle recurring drag-drop scope selection
@@ -367,6 +381,7 @@ export function AgendaClientWrapper() {
       });
       const patchJson = await patchRes.json();
       if (patchJson.ok) {
+        document.dispatchEvent(new Event("agenda-refresh"));
         toast.success(
           scope === "single"
             ? `Moved only this occurrence to ${newDate} ${newTime}`
@@ -398,7 +413,7 @@ export function AgendaClientWrapper() {
       const endsAt = data.endDate
         ? buildLocalISO(data.endDate, data.endTime || "10:00")
         : null;
-      const recurrenceRule = toRecurrenceRule(data.recurrence, data.weekdays);
+      const recurrenceRule = toRecurrenceRule(data.recurrence, data.weekdays, data.recurrenceRule);
 
       const body: Record<string, unknown> = {
         title: data.title,
@@ -409,6 +424,8 @@ export function AgendaClientWrapper() {
         startsAt,
         endsAt,
         recurrenceRule,
+        recurrenceUntil: data.recurrenceUntil || null,
+        executionWindowMinutes: data.executionWindowMinutes ?? 30,
         status: data.status,
         processVersionIds: data.processVersionIds,
         modelOverride: data.modelOverride || "",
@@ -430,7 +447,7 @@ export function AgendaClientWrapper() {
         body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (json.ok) {
+      if (res.ok && json.ok) {
         let autoRetried = false;
         const shouldAutoRetry =
           editingEvent?.latestResult === "needs_retry" &&
@@ -467,17 +484,17 @@ export function AgendaClientWrapper() {
                 : "Event updated"
         );
       } else {
-        toast.error(json.error ?? "Failed to update event");
+        throw new Error(json.error ?? "Failed to update event");
       }
     } else {
       // Default to today if no startDate (e.g. repeatable "starts now")
-      const effectiveStartDate = data.startDate || new Date().toISOString().split("T")[0];
+      const effectiveStartDate = data.startDate || ymdInTimezone(new Date(), tz);
       const effectiveStartTime = data.startTime || "10:00";
       const startsAt = buildLocalISO(effectiveStartDate, effectiveStartTime);
       const endsAt = data.endDate
         ? buildLocalISO(data.endDate, data.endTime || "10:00")
         : null;
-      const recurrenceRule = toRecurrenceRule(data.recurrence, data.weekdays);
+      const recurrenceRule = toRecurrenceRule(data.recurrence, data.weekdays, data.recurrenceRule);
 
       const res = await fetch("/api/agenda/events", {
         method: "POST",
@@ -493,6 +510,7 @@ export function AgendaClientWrapper() {
           endsAt,
           recurrenceRule,
           recurrenceUntil: data.recurrenceUntil || null,
+          executionWindowMinutes: data.executionWindowMinutes ?? 30,
           status: data.status,
           processVersionIds: data.processVersionIds,
           modelOverride: data.modelOverride || "",
@@ -504,10 +522,10 @@ export function AgendaClientWrapper() {
         }),
       });
       const json = await res.json();
-      if (json.ok) {
+      if (res.ok && json.ok) {
         toast.success("Event created");
       } else {
-        toast.error(json.error ?? "Failed to create event");
+        throw new Error(json.error ?? "Failed to create event");
       }
     }
 
@@ -593,11 +611,7 @@ export function AgendaClientWrapper() {
       <AlertDialog
         open={scopeDialogOpen}
         onOpenChange={(open: boolean) => {
-          setScopeDialogOpen(open);
-          if (!open) {
-            setPendingEditData(null);
-            setPendingOccurrenceId(null);
-          }
+          if (!open) returnToEditor();
         }}
       >
         <AlertDialogContent>
@@ -615,6 +629,7 @@ export function AgendaClientWrapper() {
               variant="outline"
               className="h-auto py-4 justify-start text-left gap-3 cursor-pointer"
               onClick={() => handleScopeSelect("single")}
+              disabled={savingScope}
             >
               <IconCalendarEvent className="size-5 text-muted-foreground shrink-0" />
               <div className="flex flex-col gap-0.5 items-start min-w-0">
@@ -628,6 +643,7 @@ export function AgendaClientWrapper() {
               variant="outline"
               className="h-auto py-4 justify-start text-left gap-3 cursor-pointer"
               onClick={() => handleScopeSelect("this_and_future")}
+              disabled={savingScope}
             >
               <IconGitBranch className="size-5 text-primary shrink-0" />
               <div className="flex flex-col gap-0.5 items-start min-w-0">
@@ -640,13 +656,10 @@ export function AgendaClientWrapper() {
           </div>
           <AlertDialogFooter className="mt-2">
             <AlertDialogCancel
-              onClick={() => {
-                setScopeDialogOpen(false);
-                setPendingEditData(null);
-                setPendingOccurrenceId(null);
-              }}
+              disabled={savingScope}
+              onClick={returnToEditor}
             >
-              Cancel
+              Back to editor
             </AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>

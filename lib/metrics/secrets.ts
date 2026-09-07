@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -56,7 +56,6 @@ function loadSecrets(): Record<string, string> {
     return _cache;
   }
   try {
-    const { statSync } = require("node:fs") as typeof import("node:fs");
     const mtime = statSync(SECRETS_PATH).mtimeMs;
     if (_cache && mtime === _cacheMtimeMs) return _cache;
     _cache = parse(SECRETS_PATH);

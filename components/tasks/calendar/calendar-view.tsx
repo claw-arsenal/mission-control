@@ -24,9 +24,6 @@ function dateKey(d: Date): string {
 function startOfMonth(year: number, month: number): Date {
   return new Date(year, month, 1);
 }
-function endOfMonth(year: number, month: number): Date {
-  return new Date(year, month + 1, 0);
-}
 
 function priorityDotClass(p: Ticket["priority"]): string {
   switch (p) {

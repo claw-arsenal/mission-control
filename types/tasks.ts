@@ -1,5 +1,5 @@
 export type ViewMode = "kanban" | "list" | "grid" | "calendar";
-export type SortMode = "newest" | "oldest" | "dueDate" | "title";
+export type SortMode = "manual" | "newest" | "oldest" | "dueDate" | "title";
 export type ModalKind = "create" | "details" | "discard" | null;
 
 export type Assignee = {
@@ -196,6 +196,7 @@ export const VIEW_OPTIONS: Array<{ key: ViewMode; label: string }> = [
 ];
 
 export const SORT_OPTIONS: Array<{ key: SortMode; label: string }> = [
+  { key: "manual", label: "Manual order" },
   { key: "newest", label: "Newest" },
   { key: "oldest", label: "Oldest" },
   { key: "dueDate", label: "Due date" },

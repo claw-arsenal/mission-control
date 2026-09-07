@@ -568,9 +568,12 @@ function DayCell({
         ].join(" ")}
       >
         {/* Date number */}
-        <span
+        <button
+          type="button"
+          aria-label={`Add event on ${format(day, "MMMM d, yyyy")}`}
+          onClick={(e) => { e.stopPropagation(); onDayClick?.(day); }}
           className={[
-            "self-start text-[11px] font-bold w-6 h-6",
+            "self-start text-xs font-bold w-7 h-7 focus-visible:outline-2 focus-visible:outline-ring",
             "flex items-center justify-center leading-none rounded-full mb-0.5",
             "transition-all duration-150",
             isToday
@@ -579,7 +582,7 @@ function DayCell({
           ].join(" ")}
         >
           {format(day, "d")}
-        </span>
+        </button>
 
         {/* Event pills */}
         <div className="flex flex-col gap-0.5 flex-1">
@@ -587,6 +590,16 @@ function DayCell({
             <div
               key={evt.id}
               draggable
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${evt.title}, ${evt.date}${evt.time ? ` at ${evt.time}` : ""}`}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onEventClick(evt);
+                }
+              }}
               onDragStart={(e) => {
                 e.stopPropagation();
                 e.dataTransfer.setData("text/event-id", evt.id);
@@ -594,7 +607,7 @@ function DayCell({
                 e.dataTransfer.effectAllowed = "move";
               }}
               onClick={(e) => { e.stopPropagation(); onEventClick(evt); }}
-              className="cursor-grab active:cursor-grabbing"
+              className="rounded-lg cursor-grab active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-ring"
             >
               <EventPill event={evt} />
             </div>
@@ -782,6 +795,16 @@ function WeekHourCell({
           <div
             key={evt.id}
             draggable
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${evt.title}, ${evt.date}${evt.time ? ` at ${evt.time}` : ""}`}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onEventClick(evt);
+                }
+              }}
             onDragStart={(e) => {
               e.stopPropagation();
               e.dataTransfer.setData("text/event-id", evt.id);
@@ -789,7 +812,7 @@ function WeekHourCell({
               e.dataTransfer.effectAllowed = "move";
             }}
             onClick={(e) => { e.stopPropagation(); onEventClick(evt); }}
-            className="cursor-grab active:cursor-grabbing"
+            className="rounded-lg cursor-grab active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-ring"
           >
             <TimeGridEventBlock event={evt} />
           </div>
@@ -927,7 +950,7 @@ function WeekView({
     <div ref={scrollContainerRef} className={`overflow-x-auto overflow-y-auto min-h-0 h-full ${className ?? ""}`}>
       <div className="min-w-[720px]">
         {/* Day header row */}
-        <div className="grid grid-cols-8 border-b bg-muted/40 sticky top-0 z-10">
+        <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b bg-muted/40 sticky top-0 z-10">
           <div className="w-12" />
           {weekDays.map((day) => (
             <div
@@ -955,7 +978,7 @@ function WeekView({
         </div>
 
         {/* Time + content grid — one row per hour, height auto-expands to content */}
-        <div className="grid grid-cols-8">
+        <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))]">
           {HOURS.map((h) => (
             <React.Fragment key={h}>
               {/* Hour gutter label */}
@@ -1050,7 +1073,7 @@ function DayView({
 
   return (
     <div ref={dayScrollRef} className={`overflow-x-auto overflow-y-auto min-h-0 h-full ${className ?? ""}`}>
-      <div className="min-w-[520px]">
+      <div className="w-full min-w-0">
         {/* Day header */}
         <div className="flex flex-col items-center py-4 border-b bg-muted/40">
           <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
@@ -1107,11 +1130,21 @@ function DayView({
                     {String(h).padStart(2, "0")}:00
                   </span>
                 </div>
-                <div className="flex-1 py-1.5 pr-1.5 relative">
+                <div className="min-w-0 flex-1 py-1.5 pr-1.5 relative">
                   {hourEvts.map((evt) => (
                     <div
                       key={evt.id}
                       draggable
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${evt.title}, ${evt.date}${evt.time ? ` at ${evt.time}` : ""}`}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onEventClick(evt);
+                }
+              }}
                       onDragStart={(e) => {
                         e.stopPropagation();
                         e.dataTransfer.setData("text/event-id", evt.id);
@@ -1119,7 +1152,7 @@ function DayView({
                         e.dataTransfer.effectAllowed = "move";
                       }}
                       onClick={() => onEventClick(evt)}
-                      className="mb-1.5 cursor-grab active:cursor-grabbing"
+                      className="mb-1.5 rounded-lg cursor-grab active:cursor-grabbing focus-visible:outline-2 focus-visible:outline-ring"
                     >
                       <TimeGridEventBlock event={evt} />
                     </div>
@@ -1297,7 +1330,7 @@ export function CustomMonthAgenda({
             <h2 className="text-[17px] font-bold tracking-tight text-foreground">
               {titleText}
             </h2>
-            <p className="text-[11px] text-muted-foreground/70">{rangeText}</p>
+            {viewMode === "month" && <p className="text-xs text-muted-foreground">{rangeText}</p>}
           </div>
         </div>
 
@@ -1308,6 +1341,7 @@ export function CustomMonthAgenda({
             size="icon"
             className="h-9 w-9 rounded-lg cursor-pointer"
             onClick={handlePrev}
+            aria-label={`Previous ${viewMode}`}
           >
             <IconChevronLeft className="size-4" />
           </Button>
@@ -1326,12 +1360,13 @@ export function CustomMonthAgenda({
             size="icon"
             className="h-9 w-9 rounded-lg cursor-pointer"
             onClick={handleNext}
+            aria-label={`Next ${viewMode}`}
           >
             <IconChevronRight className="size-4" />
           </Button>
 
           <Select value={viewMode} onValueChange={(v) => onViewModeChange(v as ViewMode)}>
-            <SelectTrigger className="h-9 w-[132px] rounded-lg text-[13px] font-medium cursor-pointer">
+            <SelectTrigger aria-label="Calendar view" className="h-9 w-[132px] rounded-lg text-[13px] font-medium cursor-pointer">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

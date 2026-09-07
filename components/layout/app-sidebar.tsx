@@ -32,7 +32,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { getDataAdapter } from "@/lib/db"
 import packageJson from "../../package.json"
 import { toast } from "sonner"
 
@@ -79,7 +78,6 @@ export function AppSidebar({ initialUser, showActivity = true, ...props }: AppSi
   const [user, setUser] = React.useState<SidebarUser | null>(sessionUser)
   const [instanceName, setInstanceName] = React.useState("")
   const [appVersion, setAppVersion] = React.useState("")
-  const adapter = React.useMemo(() => getDataAdapter(), [])
 
   // Keep displayed user in sync with live session
   React.useEffect(() => {

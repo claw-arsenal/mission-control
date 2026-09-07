@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,7 +31,11 @@ type Props = {
   onClose: () => void;
 };
 
-export function ManageLabelsModal({ open, boardName, labels, onCreate, onUpdate, onDelete, onClose }: Props) {
+export function ManageLabelsModal(props: Props) {
+  return <ManageLabelsDialog key={String(props.open)} {...props} />;
+}
+
+function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDelete, onClose }: Props) {
   const [name, setName] = useState("");
   const [color, setColor] = useState(SWATCHES[0]);
   const [error, setError] = useState("");
@@ -40,14 +44,6 @@ export function ManageLabelsModal({ open, boardName, labels, onCreate, onUpdate,
   const [editName, setEditName] = useState("");
   const [editColor, setEditColor] = useState(SWATCHES[0]);
 
-  useEffect(() => {
-    if (!open) {
-      setName("");
-      setColor(SWATCHES[0]);
-      setError("");
-      setEditingId(null);
-    }
-  }, [open]);
 
   const handleAdd = async () => {
     const trimmed = name.trim();

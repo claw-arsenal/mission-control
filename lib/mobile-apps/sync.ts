@@ -1,3 +1,4 @@
+import { ingestReportFiles, type ReportSyncStats } from "@/lib/mobile-apps/report-ingestion";
 import { createHash } from "node:crypto";
 import pLimit from "p-limit";
 import { getSql } from "@/lib/local-db";
@@ -71,13 +72,6 @@ function reportErrMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
-
-/** Warning for a report CSV skipped because decoding it would risk an OOM. */
-function oversizeWarning(label: string, file: AnyCsvFile, cap: number): string {
-  return `${label} ${file.yyyyMM} ${file.dimension}: skipped — ${file.sizeBytes != null ? `${mb(file.sizeBytes)}MB` : "size unknown"} exceeds the ${mb(cap)}MB per-file cap (raise GOOGLE_PLAY_REPORTS_MAX_FILE_MB if this file is expected).`;
-}
-
 async function upsertReviews(sql: Sql, listingId: string, reviews: RawReview[]): Promise<number> {
   let inserted = 0;
   for (const r of reviews) {
@@ -93,7 +87,7 @@ async function upsertReviews(sql: Sql, listingId: string, reviews: RawReview[]):
       ) values (
         ${listingId}, ${r.storeReviewId}, ${r.author}, ${r.rating}, ${r.title}, ${r.body},
         ${r.appVersion}, ${country}, ${r.submittedAt}, ${r.storeResponse}, ${r.language ?? null},
-        ${r.device ?? null}, ${r.raw ? JSON.stringify(r.raw) : null}
+        ${r.device ?? null}, ${r.raw ? JSON.stringify(r.raw) : null}::text::jsonb
       )
       on conflict (listing_id, store_review_id) do update
         set author = excluded.author,
@@ -129,7 +123,7 @@ async function persistReports(
     if (!r.date) continue;
     await sql`
       insert into mobile_app_report_metrics (listing_id, report, dimension, dimension_value, metric_date, report_month, metrics, source)
-      values (${listingId}, ${report}, ${dimension}, ${r.dimensionValue}, ${r.date}, ${reportMonth}, ${JSON.stringify(r.values)}, ${source})
+      values (${listingId}, ${report}, ${dimension}, ${r.dimensionValue}, ${r.date}, ${reportMonth}, ${JSON.stringify(r.values)}::text::jsonb, ${source})
       on conflict (listing_id, report, dimension, dimension_value, metric_date) do update
         set metrics = excluded.metrics, report_month = excluded.report_month, source = excluded.source, captured_at = now()
     `;
@@ -153,7 +147,7 @@ async function persistMultiReports(
     const dimValue = createHash("sha1").update(canonical).digest("hex");
     await sql`
       insert into mobile_app_report_metrics (listing_id, report, dimension, dimension_value, metric_date, report_month, metrics, dimensions, source)
-      values (${listingId}, 'store_performance', 'traffic_source', ${dimValue}, ${r.date}, ${reportMonth}, ${JSON.stringify(r.values)}, ${JSON.stringify(r.dimensions)}, ${source})
+      values (${listingId}, 'store_performance', 'traffic_source', ${dimValue}, ${r.date}, ${reportMonth}, ${JSON.stringify(r.values)}::text::jsonb, ${JSON.stringify(r.dimensions)}::text::jsonb, ${source})
       on conflict (listing_id, report, dimension, dimension_value, metric_date) do update
         set metrics = excluded.metrics, dimensions = excluded.dimensions, report_month = excluded.report_month, source = excluded.source, captured_at = now()
     `;
@@ -200,8 +194,8 @@ async function streamSingleDimFile(
     if (!batch.length) return;
     const rows = batch;
     batch = [];
-    // One transaction per batch: pipelined inserts instead of thousands of autocommits.
-    await sql.begin(async (tx) => persistReports(tx as unknown as Sql, listingId, report, file.dimension, file.yyyyMM, rows, source));
+    // The file ingestion module owns the transaction; batches keep memory bounded.
+    await persistReports(sql, listingId, report, file.dimension, file.yyyyMM, rows, source);
   };
   for await (const row of streamCsvRows(cfg, file.path)) {
     const rec = mapReportRecord(row);
@@ -222,9 +216,7 @@ async function streamTrafficFile(sql: Sql, listingId: string, cfg: GoogleConfig,
     if (!batch.length) return;
     const rows = batch;
     batch = [];
-    await sql.begin(async (tx) =>
-      persistMultiReports(tx as unknown as Sql, listingId, file.yyyyMM, rows, "google_play_console_store_performance_report"),
-    );
+    await persistMultiReports(sql, listingId, file.yyyyMM, rows, "google_play_console_store_performance_report");
   };
   for await (const row of streamCsvRows(cfg, file.path)) {
     const rec = mapReportMultiRecord(row);
@@ -251,7 +243,7 @@ async function streamReviewFile(
     if (!batch.length) return;
     const rows = batch;
     batch = [];
-    inserted += await sql.begin(async (tx) => upsertReviews(tx as unknown as Sql, listingId, rows));
+    inserted += await upsertReviews(sql, listingId, rows);
   };
   for await (const row of streamCsvRows(cfg, file.path)) {
     const rev = mapReviewRecord(row);
@@ -264,203 +256,61 @@ async function streamReviewFile(
   return { parsed, inserted };
 }
 
-type CachedReportFile = { generation: string | null; status: string | null };
-type AnyCsvFile = ReportFile | ReviewCsvFile;
-
-async function cachedReportFile(sql: Sql, listingId: string, objectPath: string): Promise<CachedReportFile | null> {
-  const rows = (await sql`
-    select generation, status from mobile_app_report_files
-    where listing_id = ${listingId}::uuid and object_path = ${objectPath}
-    limit 1
-  `) as unknown as CachedReportFile[];
-  return rows[0] ?? null;
-}
-
-function cacheMatches(file: Pick<AnyCsvFile, "generation">, cached: CachedReportFile | null): boolean {
-  if (!cached || cached.status !== "parsed") return false;
-  // Generation is the best GCS cache key. Some test/mocked clients may not expose
-  // it; in that case object_path + parsed status is still enough to avoid repeated downloads.
-  return !file.generation || cached.generation === file.generation;
-}
-
-async function markReportFile(
-  sql: Sql,
-  listingId: string,
-  file: AnyCsvFile,
-  status: "parsed" | "empty" | "failed",
-  rowsCount: number,
-  errorMessage: string | null,
-): Promise<void> {
-  await sql`
-    insert into mobile_app_report_files (
-      listing_id, report, dimension, object_path, yyyy_mm, generation, size_bytes,
-      downloaded_at, parsed_at, rows_count, status, error_message, updated_at
-    ) values (
-      ${listingId}::uuid, ${file.kind}, ${file.dimension}, ${file.path}, ${file.yyyyMM}, ${file.generation}, ${file.sizeBytes},
-      now(), now(), ${rowsCount}, ${status}, ${errorMessage}, now()
-    )
-    on conflict (listing_id, object_path) do update
-      set report = excluded.report,
-          dimension = excluded.dimension,
-          yyyy_mm = excluded.yyyy_mm,
-          generation = excluded.generation,
-          size_bytes = excluded.size_bytes,
-          downloaded_at = excluded.downloaded_at,
-          parsed_at = excluded.parsed_at,
-          rows_count = excluded.rows_count,
-          status = excluded.status,
-          error_message = excluded.error_message,
-          updated_at = now()
-  `;
-}
-
-type ReportSyncStats = { warnings: string[]; groupsAttempted: number; filesFound: number; filesDownloaded: number; filesSkipped: number };
-
 async function listFilesOrWarning(
-  cfg: GoogleConfig,
-  kind: ReportKind,
-  appIdentifier: string,
-  dimensions: readonly string[],
-  label: string,
-  allMonths: boolean,
+  cfg: GoogleConfig, kind: ReportKind, appIdentifier: string,
+  dimensions: readonly string[], label: string, allMonths: boolean,
 ): Promise<{ files: ReportFile[]; warning: string | null }> {
   try {
     const files = await listReportFiles(cfg, kind, appIdentifier, dimensions, { allMonths });
     return { files, warning: files.length ? null : reportNotFoundWarning(label, cfg, appIdentifier, dimensions) };
-  } catch (err) {
-    return { files: [], warning: `${label} report: ${reportErrMessage(err)}` };
+  } catch (error) {
+    return { files: [], warning: reportErrMessage(error) };
   }
 }
 
 async function syncSingleDimensionReportFiles(
-  sql: Sql,
-  listingId: string,
-  cfg: GoogleConfig,
-  appIdentifier: string,
-  report: ReportKind,
-  label: string,
-  dimensions: readonly string[],
-  source: string,
-  forceReports: boolean,
-  allMonths: boolean,
+  sql: Sql, listingId: string, cfg: GoogleConfig, appIdentifier: string,
+  report: ReportKind, label: string, dimensions: readonly string[],
+  source: string, forceReports: boolean, allMonths: boolean,
 ): Promise<ReportSyncStats> {
-  const warnings: string[] = [];
-  const { files, warning } = await listFilesOrWarning(cfg, report, appIdentifier, dimensions, label, allMonths);
-  if (warning) warnings.push(warning);
-  let filesDownloaded = 0;
-  let filesSkipped = 0;
-
-  for (const file of files) {
-    if (file.sizeBytes != null && file.sizeBytes > cfg.reportsMaxFileBytes) {
-      warnings.push(oversizeWarning(label, file, cfg.reportsMaxFileBytes));
-      continue;
-    }
-    const cached = await cachedReportFile(sql, listingId, file.path);
-    if (!forceReports && cacheMatches(file, cached)) {
-      filesSkipped++;
-      continue;
-    }
-    try {
-      const rows = await streamSingleDimFile(sql, listingId, cfg, file, report, source);
-      await markReportFile(sql, listingId, file, rows > 0 ? "parsed" : "empty", rows, null);
-      filesDownloaded++;
-    } catch (err) {
-      const msg = reportErrMessage(err);
-      await markReportFile(sql, listingId, file, "failed", 0, msg).catch(() => null);
-      warnings.push(`${label} ${file.yyyyMM} ${file.dimension}: ${msg}`);
-    }
-  }
-  return { warnings, groupsAttempted: 1, filesFound: files.length, filesDownloaded, filesSkipped };
+  const discovery = await listFilesOrWarning(cfg, report, appIdentifier, dimensions, label, allMonths);
+  return ingestReportFiles(sql, listingId, cfg, {
+    ...discovery, label, force: forceReports,
+    consume: async (db, file) => ({ rows: await streamSingleDimFile(db, listingId, cfg, file, report, source) }),
+  });
 }
 
 async function syncTrafficSourceFiles(
-  sql: Sql,
-  listingId: string,
-  cfg: GoogleConfig,
-  appIdentifier: string,
-  forceReports: boolean,
-  allMonths: boolean,
+  sql: Sql, listingId: string, cfg: GoogleConfig, appIdentifier: string,
+  forceReports: boolean, allMonths: boolean,
 ): Promise<ReportSyncStats> {
-  const warnings: string[] = [];
   const label = "store performance traffic source";
-  const { files, warning } = await listFilesOrWarning(cfg, "store_performance", appIdentifier, STORE_PERFORMANCE_TRAFFIC_SOURCE_DIMENSIONS, label, allMonths);
-  if (warning) warnings.push(warning);
-  let filesDownloaded = 0;
-  let filesSkipped = 0;
-
-  for (const file of files) {
-    if (file.sizeBytes != null && file.sizeBytes > cfg.reportsMaxFileBytes) {
-      warnings.push(oversizeWarning(label, file, cfg.reportsMaxFileBytes));
-      continue;
-    }
-    const cached = await cachedReportFile(sql, listingId, file.path);
-    if (!forceReports && cacheMatches(file, cached)) {
-      filesSkipped++;
-      continue;
-    }
-    try {
-      const rows = await streamTrafficFile(sql, listingId, cfg, file);
-      await markReportFile(sql, listingId, file, rows > 0 ? "parsed" : "empty", rows, null);
-      filesDownloaded++;
-    } catch (err) {
-      const msg = reportErrMessage(err);
-      await markReportFile(sql, listingId, file, "failed", 0, msg).catch(() => null);
-      warnings.push(`${label} ${file.yyyyMM}: ${msg}`);
-    }
-  }
-  return { warnings, groupsAttempted: 1, filesFound: files.length, filesDownloaded, filesSkipped };
+  const discovery = await listFilesOrWarning(cfg, "store_performance", appIdentifier, STORE_PERFORMANCE_TRAFFIC_SOURCE_DIMENSIONS, label, allMonths);
+  return ingestReportFiles(sql, listingId, cfg, {
+    ...discovery, label, force: forceReports,
+    consume: async (db, file) => ({ rows: await streamTrafficFile(db, listingId, cfg, file) }),
+  });
 }
 
-
 async function syncGooglePlayReviewCsvFiles(
-  sql: Sql,
-  listingId: string,
-  cfg: GoogleConfig,
-  appIdentifier: string,
-  forceReports: boolean,
-  allMonths: boolean,
-): Promise<ReportSyncStats & { reviewsParsed: number; reviewsInserted: number }> {
-  const warnings: string[] = [];
-  const label = "reviews CSV";
+  sql: Sql, listingId: string, cfg: GoogleConfig, appIdentifier: string,
+  forceReports: boolean, allMonths: boolean,
+): Promise<ReportSyncStats> {
   let files: ReviewCsvFile[] = [];
+  let warning: string | null = null;
   try {
     files = await listReviewReportFiles(cfg, appIdentifier, { allMonths });
-    if (files.length === 0) {
-      const bucket = cfg.reportsBucket || "not configured";
-      warnings.push(`No Google Play reviews CSV reports found in bucket ${bucket} for package ${appIdentifier}. Expected reviews/reviews_${appIdentifier}_YYYYMM.csv.`);
-    }
-  } catch (err) {
-    return { warnings: [`${label}: ${reportErrMessage(err)}`], groupsAttempted: 1, filesFound: 0, filesDownloaded: 0, filesSkipped: 0, reviewsParsed: 0, reviewsInserted: 0 };
+    if (!files.length) warning = "No monthly Google Play review reports are available.";
+  } catch (error) {
+    warning = reportErrMessage(error);
   }
-
-  let filesDownloaded = 0;
-  let filesSkipped = 0;
-  let reviewsParsed = 0;
-  let reviewsInserted = 0;
-
-  for (const file of files) {
-    if (file.sizeBytes != null && file.sizeBytes > cfg.reportsMaxFileBytes) {
-      warnings.push(oversizeWarning(label, file, cfg.reportsMaxFileBytes));
-      continue;
-    }
-    const cached = await cachedReportFile(sql, listingId, file.path);
-    if (!forceReports && cacheMatches(file, cached)) {
-      filesSkipped++;
-      continue;
-    }
-    try {
-      const { parsed, inserted } = await streamReviewFile(sql, listingId, cfg, file);
-      reviewsParsed += parsed;
-      reviewsInserted += inserted;
-      await markReportFile(sql, listingId, file, parsed > 0 ? "parsed" : "empty", parsed, null);
-      filesDownloaded++;
-    } catch (err) {
-      const msg = reportErrMessage(err);
-      await markReportFile(sql, listingId, file, "failed", 0, msg).catch(() => null);
-      warnings.push(`${label} ${file.yyyyMM}: ${msg}`);
-    }
-  }
-  return { warnings, groupsAttempted: 1, filesFound: files.length, filesDownloaded, filesSkipped, reviewsParsed, reviewsInserted };
+  return ingestReportFiles(sql, listingId, cfg, {
+    files, warning, label: "reviews CSV", force: forceReports,
+    consume: async (db, file) => {
+      const result = await streamReviewFile(db, listingId, cfg, file);
+      return { rows: result.parsed, reviewsParsed: result.parsed, reviewsInserted: result.inserted };
+    },
+  });
 }
 
 /** Stored official per-territory ratings for a listing (jsonb may arrive as object or string). */
@@ -558,12 +408,13 @@ async function syncListing(
     const summary = summarizeReviews(reviews);
     await sql`
       insert into app_rating_snapshots (listing_id, avg_rating, ratings_count, histogram)
-      values (${listing.id}, ${summary.avgRating}, ${summary.ratingsCount}, ${JSON.stringify(summary.histogram)})
+      values (${listing.id}, ${summary.avgRating}, ${summary.ratingsCount}, ${JSON.stringify(summary.histogram)}::text::jsonb)
     `;
 
     const cfg = loadMobileReviewsConfig();
     const reportWarnings: string[] = [];
     let reportAttempts = 0;
+    let reportFilesSucceeded = 0;
     let officialRatings: TerritoryRating[] = [];
     let currentRating: number | null = null;
     let ratingsCount: number | null = null;
@@ -622,6 +473,7 @@ async function syncListing(
           opts.allReportMonths,
         );
         reportAttempts += ratingsStats.groupsAttempted;
+        reportFilesSucceeded += ratingsStats.filesDownloaded + ratingsStats.filesSkipped;
         reportWarnings.push(...ratingsStats.warnings);
       }
       // ALWAYS read the report-derived ratings already in our DB (cheap, no GCS).
@@ -651,10 +503,10 @@ async function syncListing(
       update mobile_app_listings
       set current_rating = ${currentRating},
           ratings_count = ${ratingsCount},
-          official_ratings = ${officialRatings.length ? JSON.stringify(officialRatings) : null},
+          official_ratings = ${officialRatings.length ? JSON.stringify(officialRatings) : null}::text::jsonb,
           rating_source = ${ratingSource},
           rating_as_of = ${ratingAsOf},
-          store_metadata = coalesce(${storeMetadata ? JSON.stringify(storeMetadata) : null}::jsonb, store_metadata),
+          store_metadata = coalesce(${storeMetadata ? JSON.stringify(storeMetadata) : null}::text::jsonb, store_metadata),
           last_synced_at = now()
       where id = ${listing.id}
     `;
@@ -708,6 +560,7 @@ async function syncListing(
       const stats = [installsStats, crashesStats, storePerfStats, trafficStats, reviewCsvStats];
       for (const s of stats) {
         reportAttempts += s.groupsAttempted;
+        reportFilesSucceeded += s.filesDownloaded + s.filesSkipped;
         reportWarnings.push(...s.warnings);
       }
       // reviewCsvStats keeps its precise type, so the review counts are typed.
@@ -722,7 +575,7 @@ async function syncListing(
         ? "not_configured"
         : reportWarnings.length === 0
           ? "success"
-          : reportWarnings.length >= reportAttempts
+          : reportFilesSucceeded === 0
             ? "failed"
             : "partial";
 
@@ -730,7 +583,7 @@ async function syncListing(
       await sql`
         update app_review_sync_runs
         set status = 'success', finished_at = now(), fetched_count = ${fetchedReviewCount}, upserted_count = ${inserted},
-            report_status = ${reportsStatus}, report_warnings = ${JSON.stringify(reportWarnings)}
+            report_status = ${reportsStatus}, report_warnings = ${JSON.stringify(reportWarnings)}::text::jsonb
         where id = ${runId}::uuid
       `;
     }
@@ -789,6 +642,7 @@ export async function syncApp(
     force?: boolean;
     dedupeMs?: number;
     store?: Store;
+    listingId?: string;
     refreshReports?: boolean;
     syncReports?: boolean;
     syncAppleStorefronts?: boolean;
@@ -816,6 +670,7 @@ export async function syncApp(
     from mobile_app_listings
     where mobile_app_id = ${appId}
       and (${opts.store ?? null}::text is null or store = ${opts.store ?? null})
+      and (${opts.listingId ?? null}::uuid is null or id = ${opts.listingId ?? null}::uuid)
   `) as unknown as ListingRow[];
 
   const limit = pLimit(Math.max(1, opts.listingConcurrency ?? cfg.sync.concurrency));

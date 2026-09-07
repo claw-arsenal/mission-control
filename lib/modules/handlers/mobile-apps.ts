@@ -34,6 +34,7 @@ export const mobileAppsHandler = {
     // rollup tables added later. Children first; CASCADE covers any stragglers so
     // none are left orphaned with dangling FKs.
     for (const table of [
+      "mobile_apps_migrations",
       "mobile_app_report_latest_breakdowns",
       "mobile_app_report_daily_rollups",
       "mobile_app_report_freshness",

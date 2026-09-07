@@ -179,7 +179,7 @@ export async function getBoardsPageData(): Promise<BoardHydration[]> {
         description: ticket.description ?? "",
         statusId: ticket.column_id,
         priority: (ticket.priority ?? "medium") as TicketPriority,
-        dueDate: ticket.due_date,
+        dueDate: ticket.due_date?.slice(0, 10) ?? null,
         tags: ticket.tags ?? [],
         labelIds: ticket.label_ids ?? [],
         assigneeIds: ticket.assignee_ids ?? [],

@@ -5,7 +5,7 @@ import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
 import { ensureMobileAppsSchema } from "@/lib/mobile-apps/ensure-schema";
 import { syncApp } from "@/lib/mobile-apps/sync";
-import { checkOfficialReportFreshness, type FreshnessResult } from "@/lib/mobile-apps/report-freshness";
+import { checkOfficialReportFreshness, summarizeReportFreshness, type FreshnessResult } from "@/lib/mobile-apps/report-freshness";
 import { enqueueReportSyncJob } from "@/lib/mobile-apps/report-jobs";
 import { isUuid } from "@/lib/mobile-apps/ids";
 
@@ -22,10 +22,6 @@ const bodySchema = z.object({
   consistency: z.enum(["strict", "available"]).default("available"),
   includeReports: z.boolean().default(true),
 });
-
-// Worst-first so the headline status reflects whatever needs attention.
-const STATUS_ORDER: FreshnessResult["status"][] = ["failed", "stale", "refreshing", "unknown", "not_configured", "fresh"];
-const NOT_FRESH = new Set<FreshnessResult["status"]>(["failed", "stale", "refreshing"]);
 
 /**
  * The API-first freshness control plane. Refreshes light live sources (reviews +
@@ -61,7 +57,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const googleListings = listings.filter((l) => l.store === "google");
 
     // 1. Light live sync — reviews + primary rating only, both stores. Never heavy.
-    await syncApp(id, { force: true, syncReports: false, syncAppleStorefronts: false }).catch(() => null);
+    let liveError: string | null = null;
+    const liveResults = await syncApp(id, { force: true, syncReports: false, syncAppleStorefronts: false }).catch((error) => {
+      liveError = error instanceof Error ? error.message : "Live store refresh failed.";
+      return [];
+    });
+    const liveFresh = !liveError && liveResults.every(result => result.status !== "failed");
+    if (!liveFresh && !liveError) liveError = liveResults.find(result => result.status === "failed")?.error ?? "A store could not be refreshed.";
 
     // 2. Cheap official-report freshness check per Google listing (metadata only).
     const results: Array<{ listingId: string } & FreshnessResult> = [];
@@ -84,8 +86,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       }
     }
 
-    const worst = STATUS_ORDER.find((s) => results.some((r) => r.status === s)) ?? "fresh";
-    const reportsFresh = !NOT_FRESH.has(worst);
+    const { status: worst, reportsFresh } = summarizeReportFreshness(results.map(r => r.status), includeReports ? googleListings.length : 0);
 
     // 3. Queue the worker if any listing is stale (not on 'failed' — avoid retry spam).
     let jobId: string | null = results.find((r) => r.status === "refreshing")?.activeJobId ?? null;
@@ -101,6 +102,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     const freshness = {
+      liveReviews: { status: liveFresh ? "fresh" : "failed", error: liveError },
       googleReports: {
         status: worst,
         reportsFresh,
@@ -114,12 +116,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     };
 
     if (consistency === "strict") {
+      if (!liveFresh) {
+        return NextResponse.json({ ok: false, status: "failed", fresh: false, liveFresh, reportsFresh, error: liveError, freshness }, { status: 503 });
+      }
       if (reportsFresh) {
         return NextResponse.json({ ok: true, status: "fresh", fresh: true, freshness });
       }
-      if (worst === "failed") {
+      if (worst === "failed" || worst === "unknown" || worst === "not_configured") {
         return NextResponse.json(
-          { ok: false, status: "failed", fresh: false, error: "Latest official report exists but could not be processed.", freshness },
+          { ok: false, status: worst, fresh: false, error: worst === "not_configured" ? "Google Play reports are not configured." : "Report freshness could not be verified.", freshness },
           { status: 503 },
         );
       }
@@ -138,7 +143,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     // available: never block; report the truth so the UI can label "refreshing".
-    return NextResponse.json({ ok: true, status: worst, fresh: reportsFresh, reportsFresh, jobId, freshness });
+    return NextResponse.json({ ok: true, status: worst, fresh: liveFresh && reportsFresh, liveFresh, reportsFresh, jobId, freshness });
   } catch (error) {
     return fail(error instanceof Error ? error.message : "Failed to ensure freshness", 500);
   }

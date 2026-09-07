@@ -1,7 +1,7 @@
 import { getSql } from "@/lib/local-db";
 import { syncApp } from "@/lib/mobile-apps/sync";
 import { refreshReportRollups } from "@/lib/mobile-apps/report-rollups";
-import { reapStaleReportJobs } from "@/lib/mobile-apps/report-jobs";
+import { enqueueReportSyncJob, reapStaleReportJobs, type EnqueueReportSyncInput } from "@/lib/mobile-apps/report-jobs";
 import { checkOfficialReportFreshness } from "@/lib/mobile-apps/report-freshness";
 
 type Sql = ReturnType<typeof getSql>;
@@ -72,7 +72,7 @@ export async function claimQueuedJobs(sql: Sql, limit = 10): Promise<ClaimedJob[
 }
 
 export async function heartbeatJob(sql: Sql, jobId: string): Promise<void> {
-  await sql`update mobile_app_report_sync_jobs set heartbeat_at = now() where id = ${jobId}::uuid`.catch(() => null);
+  await sql`update mobile_app_report_sync_jobs set heartbeat_at = now() where id = ${jobId}::uuid and status = 'running'`.catch(() => null);
 }
 
 /**
@@ -89,8 +89,8 @@ export async function finishJob(sql: Sql, jobId: string, outcome: JobOutcome): P
         finished_at = now(),
         heartbeat_at = now(),
         error_message = ${outcome.error ?? null},
-        warnings = ${JSON.stringify(outcome.warnings ?? [])}::jsonb,
-        stats = ${JSON.stringify(outcome.stats ?? {})}::jsonb
+        warnings = ${JSON.stringify(outcome.warnings ?? [])}::text::jsonb,
+        stats = ${JSON.stringify(outcome.stats ?? {})}::text::jsonb
     where id = ${jobId}::uuid
   `;
 }
@@ -114,57 +114,110 @@ async function resolveAppIds(sql: Sql, job: ClaimedJob): Promise<string[]> {
 /**
  * Run one job's heavy work. This is the ONLY place that runs syncApp with the
  * heavy flags on (syncReports + syncAppleStorefronts). After each app syncs its
- * reports into the raw metrics table, rollups are rebuilt in SQL and freshness is
- * updated. Idempotent: sync skips unchanged GCS generations and rollups converge.
+ * reports into the raw metrics table, rollups are rebuilt before completion is
+ * published. Freshness must observe the terminal job, not its own running state.
  */
 export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDeps = defaultDeps): Promise<JobOutcome> {
   // Timer-based heartbeat for the whole job: per-step beats are not enough because
   // one syncApp call can stream CSVs for longer than the stale threshold.
   const beat = setInterval(() => void heartbeatJob(sql, job.id), HEARTBEAT_INTERVAL_MS);
   try {
-    const appIds = await resolveAppIds(sql, job);
     const warnings: string[] = [];
-    const stats: Record<string, unknown> = { apps: appIds.length };
+    const errors: string[] = [];
+    const stats: Record<string, unknown> = {};
     let fetched = 0;
     let inserted = 0;
     let failures = 0;
+    let successes = 0;
+    let partials = 0;
     const googleListingIds = new Set<string>();
+    const rollupFailures = new Map<string, string>();
 
-    for (const appId of appIds) {
-      await heartbeatJob(sql, job.id);
-      // Backfill = full re-ingest: list ALL report months (not just the lookback
-      // window) and re-parse even cached generations. Memory-safe — files stream
-      // in bounded batches and oversized files are still skipped by the size cap.
-      const results = await deps.syncApp(appId, {
-        force: true,
-        syncReports: true,
-        syncAppleStorefronts: true,
-        refreshReports: job.mode === "backfill",
-        allReportMonths: job.mode === "backfill",
-        store: job.store ?? undefined,
-      });
-      for (const r of results) {
-        fetched += r.fetched ?? 0;
-        inserted += r.inserted ?? 0;
-        if (r.status === "failed") failures += 1;
-        if (Array.isArray(r.reportWarnings)) warnings.push(...r.reportWarnings);
-        if (r.store === "google" && r.listingId) googleListingIds.add(r.listingId);
+    try {
+      const appIds = await resolveAppIds(sql, job);
+      stats.apps = appIds.length;
+      for (const appId of appIds) {
+        await heartbeatJob(sql, job.id);
+        try {
+          const results = await deps.syncApp(appId, {
+            force: true,
+            syncReports: true,
+            syncAppleStorefronts: true,
+            refreshReports: job.mode === "backfill",
+            allReportMonths: job.mode === "backfill",
+            store: job.store ?? undefined,
+            listingId: job.listingId ?? undefined,
+            listingConcurrency: 1,
+          });
+          for (const r of results) {
+            fetched += r.fetched ?? 0;
+            inserted += r.inserted ?? 0;
+            if (r.status === "failed" || r.reportsStatus === "failed") {
+              failures++;
+              errors.push(r.error || `${r.store} listing ${r.listingId}: report sync failed`);
+            } else if (r.reportsStatus === "partial") partials++;
+            else if (r.status !== "skipped") successes++;
+            if (Array.isArray(r.reportWarnings)) warnings.push(...r.reportWarnings);
+            if (r.store === "google" && r.listingId) googleListingIds.add(r.listingId);
+          }
+        } catch (error) {
+          failures++;
+          errors.push(error instanceof Error ? error.message : String(error));
+        }
       }
+    } catch (error) {
+      failures++;
+      errors.push(error instanceof Error ? error.message : String(error));
     }
 
-    // Rebuild rollups + recompute real freshness for every Google listing we touched.
     for (const listingId of googleListingIds) {
       await heartbeatJob(sql, job.id);
-      await deps.refreshReportRollups(sql, listingId);
-      await deps.updateFreshness(sql, listingId);
+      try {
+        await deps.refreshReportRollups(sql, listingId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        rollupFailures.set(listingId, message);
+        errors.push(`Report rollups: ${message}`);
+      }
     }
 
     stats.fetched = fetched;
     stats.inserted = inserted;
     stats.googleListings = googleListingIds.size;
+    stats.rollupFailedListings = [...rollupFailures.keys()];
 
-    const status: JobOutcome["status"] = failures === 0 ? "success" : failures < appIds.length ? "partial" : "failed";
-    return { status, warnings, stats, error: failures > 0 ? `${failures} listing sync(s) failed` : null };
+    const status: JobOutcome["status"] = failures > 0 && successes + partials === 0
+      ? "failed"
+      : failures > 0 || partials > 0 || rollupFailures.size > 0
+        ? "partial"
+        : successes > 0 ? "success" : "skipped";
+    const outcome: JobOutcome = { status, warnings, stats, error: errors.length ? errors.join("; ") : null };
+    await finishJob(sql, job.id, outcome);
+    // Clear a completed job's persisted "refreshing" state even if a later
+    // metadata lookup fails or the target vanished during processing.
+    await sql`
+      update mobile_app_report_freshness
+      set status = ${status === "failed" ? "failed" : "unknown"}, active_job_id = null,
+          error_message = ${outcome.error ?? null}, updated_at = now()
+      where active_job_id = ${job.id}::uuid
+    `;
+    for (const listingId of googleListingIds) {
+      try {
+        const rollupError = rollupFailures.get(listingId);
+        if (rollupError) throw new Error(rollupError);
+        await deps.updateFreshness(sql, listingId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await sql`
+          insert into mobile_app_report_freshness (listing_id, status, error_message, checked_at)
+          values (${listingId}::uuid, 'failed', ${message}, now())
+          on conflict (listing_id) do update set status = 'failed', active_job_id = null,
+            error_message = excluded.error_message, checked_at = now(), updated_at = now()
+        `;
+      }
+    }
+    await notifyChange(sql, job.mobileAppId);
+    return outcome;
   } finally {
     clearInterval(beat);
   }
@@ -183,18 +236,37 @@ export async function processQueuedJobs(
   deps: WorkerDeps = defaultDeps,
 ): Promise<{ processed: number; jobIds: string[] }> {
   await reapStaleReportJobs(sql);
-  const jobs = await claimQueuedJobs(sql);
-  for (const job of jobs) {
-    try {
-      const outcome = await runReportSyncJob(sql, job, deps);
-      await finishJob(sql, job.id, outcome);
-    } catch (error) {
-      await finishJob(sql, job.id, {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    await notifyChange(sql, job.mobileAppId);
+  const jobIds: string[] = [];
+  while (true) {
+    // Waiting work must stay queued: only the current job has a heartbeat.
+    const [job] = await claimQueuedJobs(sql, 1);
+    if (!job) break;
+    await runReportSyncJob(sql, job, deps);
+    jobIds.push(job.id);
   }
-  return { processed: jobs.length, jobIds: jobs.map((j) => j.id) };
+  return { processed: jobIds.length, jobIds };
+}
+
+/** Keep the session-scoped advisory lock on one reserved connection for the tick. */
+export async function runReportWorkerTick(
+  sql: Sql,
+  enqueue?: EnqueueReportSyncInput,
+  deps: WorkerDeps = defaultDeps,
+): Promise<{ processed: number; jobIds: string[]; skipped: boolean }> {
+  // A manual request must remain queued even if another worker holds the lock.
+  if (enqueue) await enqueueReportSyncJob(sql, enqueue);
+  const connection = await sql.reserve();
+  let locked = false;
+  try {
+    locked = await acquireWorkerLock(connection);
+    if (!locked) return { processed: 0, jobIds: [], skipped: true };
+    // Rollups use transactions; reserved postgres.js clients do not expose begin.
+    return { ...await processQueuedJobs(sql, deps), skipped: false };
+  } finally {
+    try {
+      if (locked) await releaseWorkerLock(connection);
+    } finally {
+      await connection.release();
+    }
+  }
 }

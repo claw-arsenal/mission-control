@@ -3,6 +3,8 @@
   "version": "4.1.0",
   "private": true,
   "scripts": {
+    "mobile:reviews:watch": "tsx scripts/mobile-reviews-watch.ts --watch",
+    "mobile:reviews:once": "tsx scripts/mobile-reviews-watch.ts --once",
     "dev": "docker compose up -d db db-init && bash scripts/mc-services.sh restart --dev",
     "dev:stop": "docker compose stop db && bash scripts/mc-services.sh stop",
     "dev:db": "docker compose up -d db db-init",
@@ -29,7 +31,9 @@
     "agenda:smoke": "node scripts/agenda-smoke.mjs",
     "logs:repair-attribution": "node scripts/repair-agent-log-attribution.mjs",
     "dev:kill": "bash scripts/mc-services.sh stop 2>/dev/null; sleep 1; pkill -f 'next dev' 2>/dev/null; pkill -f 'next-server' 2>/dev/null; pkill -f 'next start' 2>/dev/null; pkill -f 'mobile-reports-sync' 2>/dev/null; pkill -f 'mc-services.*watch' 2>/dev/null; sleep 1; fuser -k 3000/tcp 2>/dev/null; sleep 0.5; lsof -ti:3000 2>/dev/null | xargs -r kill -9 2>/dev/null; echo 'All Mission Control processes killed. Port 3000 freed.'",
-    "test:agenda": "set -a && . .env.local && set +a && node scripts/agenda-integration-test.mjs"
+    "test:agenda": "set -a && . .env.local && set +a && node scripts/agenda-integration-test.mjs",
+    "preview:mobile-apps": "node scripts/preview-mobile-apps.mjs",
+    "test:mobile-reports:postgres": "vitest run lib/mobile-apps/reports-postgres.test.ts"
   },
   "dependencies": {
     "@azure/msal-browser": "^4.0.0",
@@ -46,20 +50,22 @@
     "@fullcalendar/multimonth": "^6.1.20",
     "@fullcalendar/react": "^6.1.20",
     "@fullcalendar/timegrid": "^6.1.20",
-    "@google-cloud/storage": "^7.19.0",
+    "@google-cloud/storage": "^8.0.1",
     "@googleapis/androidpublisher": "^36.0.0",
     "@monaco-editor/react": "^4.6.0",
     "@tabler/icons-react": "^3.38.0",
     "@tailwindcss/postcss": "^4.2.1",
     "@tanstack/react-table": "^8.21.3",
-    "@tiptap/extension-code-block-lowlight": "^2.10.3",
-    "@tiptap/extension-link": "^2.10.3",
-    "@tiptap/extension-task-item": "^2.10.3",
-    "@tiptap/extension-task-list": "^2.10.3",
-    "@tiptap/extension-underline": "^2.10.3",
-    "@tiptap/react": "^2.10.3",
-    "@tiptap/starter-kit": "^2.10.3",
-    "adm-zip": "^0.5.16",
+    "@tiptap/core": "^3.31.3",
+    "@tiptap/extension-code-block-lowlight": "^3.31.3",
+    "@tiptap/extension-link": "^3.31.3",
+    "@tiptap/extension-task-item": "^3.31.3",
+    "@tiptap/extension-task-list": "^3.31.3",
+    "@tiptap/extension-underline": "^3.31.3",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
+    "adm-zip": "^0.6.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "csv-parse": "^6.2.1",
@@ -92,15 +98,24 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.7",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
     "@types/luxon": "^3.7.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "jsdom": "^26.1.0",
     "shadcn": "^3.8.5",
     "typescript": "5.9.3",
+    "vite": "^8.0.0",
     "vitest": "^4.1.8"
+  },
+  "overrides": {
+    "dompurify": "^3.4.15",
+    "gaxios": {
+      "uuid": "^11.1.1"
+    }
   }
 }

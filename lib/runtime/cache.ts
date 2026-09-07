@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 
 /**
@@ -68,8 +68,8 @@ function readIdentityName(agentId: string): string {
 
   for (const p of paths) {
     try {
-      if (!existsSync(p)) continue;
-      const raw = readFileSync(p, "utf8");
+      if (!existsSync(/*turbopackIgnore: true*/ p)) continue;
+      const raw = readFileSync(/*turbopackIgnore: true*/ p, "utf8");
       const nameMatch = raw.match(/^-\s*Name:\s*(.+)/m);
       if (nameMatch?.[1]?.trim()) return nameMatch[1].trim();
     } catch {

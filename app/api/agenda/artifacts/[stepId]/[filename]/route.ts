@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/local-db";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { fileResponseHeaders } from "@/lib/files/response-headers";
 
 export async function GET(
   _request: Request,
@@ -34,15 +35,9 @@ export async function GET(
     }
 
     const data = await readFile(file.path);
-    // Serve inline so <img>/Next Image can render previews.
-    // The detail sheet's download link uses <a download={...}> which forces the
-    // browser to download same-origin files regardless of Content-Disposition,
-    // so switching away from "attachment" doesn't break the download button.
-    const safeFilename = file.name.replace(/"/g, '');
     return new NextResponse(new Uint8Array(data), {
       headers: {
-        "Content-Type": file.mimeType || "application/octet-stream",
-        "Content-Disposition": `inline; filename="${safeFilename}"`,
+        ...fileResponseHeaders(file.name, file.mimeType || "application/octet-stream"),
         "Content-Length": String(data.length),
         "Cache-Control": "private, max-age=60",
       },

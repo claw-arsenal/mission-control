@@ -102,6 +102,7 @@ export type AgendaEventSummary = {
     | "skipped"
     | null;
   recurrenceRule?: string | null;
+  recurrenceUntil?: string | null;
   occurrenceId?: string;
   modelOverride?: string;
   executionWindowMinutes?: number;
@@ -110,6 +111,7 @@ export type AgendaEventSummary = {
   createdAt?: string | null;
   dependsOnEventId?: string | null;
   dependsOnEventTitle?: string | null;
+  dependencyTimeoutHours?: number;
 };
 
 type RunAttempt = {

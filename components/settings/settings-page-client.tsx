@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { ModulesSection } from "@/components/settings/modules-section";
+import { ReviewNotificationsSection } from "@/components/settings/review-notifications-section";
 import { AllowedUsersSection } from "@/components/settings/allowed-users-section";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -537,6 +538,7 @@ export function SettingsPageClient(): React.ReactNode {
           ))}
         </div>
       </div>
+      <ReviewNotificationsSection />
     </section>
   );
 

@@ -77,7 +77,10 @@ export async function GET() {
         core: m.core,
         navUrl: m.nav?.url || null,
         navTitle: m.nav?.title || null,
-        enabled: r ? r.enabled : true,
+        enabled: m.core || Boolean(r?.enabled),
+        active: snap.enabled.has(m.id),
+        ...snap.availability[m.id],
+        skill: m.skill || null,
         enabledAt: r?.enabled_at || null,
         disabledAt: r?.disabled_at || null,
         enabledByName: r?.enabled_by_name || null,
@@ -118,20 +121,11 @@ export async function POST(request: Request) {
 
     if (action === "previewDisable") {
       if (def.core) return fail("Core modules cannot be disabled.");
-      const handler = HANDLERS[moduleId];
-      if (!handler) return ok({ counts: [], bytesOnDisk: null, sampleAffected: [], finalWarning: "" });
-      const preview = await handler.preview(sql);
-      return ok({ preview });
+      return ok({ preview: { counts: [], bytesOnDisk: null, sampleAffected: [], finalWarning: "Disabling hides the module and pauses its background work. All data is preserved." } });
     }
 
     if (action === "disable") {
       if (def.core) return fail("Core modules cannot be disabled.");
-      const confirmName = String(body.confirmName || "").trim();
-      if (confirmName !== moduleId) {
-        return fail(`Type "${moduleId}" exactly to confirm.`);
-      }
-      const handler = HANDLERS[moduleId];
-      if (handler) await handler.cleanup(sql);
       await sql`
         insert into module_state (module_id, enabled, disabled_at, disabled_by_email, disabled_by_name, updated_at)
         values (${moduleId}, false, now(), ${actor.email}, ${actor.name}, now())
@@ -148,6 +142,8 @@ export async function POST(request: Request) {
     }
 
     if (action === "enable") {
+      const snapshot = await readModuleSnapshot(true);
+      if (!snapshot.availability[moduleId]?.available) return fail(snapshot.availability[moduleId]?.reason || "Required skill unavailable.", 409);
       const handler = HANDLERS[moduleId];
       if (handler) await handler.setup(sql);
       await sql`

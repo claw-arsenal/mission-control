@@ -1,4 +1,5 @@
 import type { Pool, RowDataPacket } from "mysql2/promise";
+import { createHash } from "node:crypto";
 import { getMysqlCredentials, type MysqlCredentials } from "@/lib/metrics/secrets";
 import { makeLimiter } from "@/lib/metrics/limiter";
 
@@ -7,10 +8,8 @@ import { makeLimiter } from "@/lib/metrics/limiter";
  *
  * Connection lifecycle:
  *   - Lazy module-level pool, recreated when credentials change.
- *   - Statement-level timeout enforced via SET STATEMENT max_execution_time
- *     before the user query.
- *   - Hard row cap on the read side (we slice in JS) to prevent a runaway
- *     SELECT * from blowing up the Node process.
+ *   - Server session and client timeouts bound query execution.
+ *   - Returned rows are capped after retrieval. This is not a streaming memory cap.
  */
 
 const QUERY_TIMEOUT_MS = 20_000;
@@ -28,7 +27,7 @@ let _pool: Pool | null = null;
 let _poolKey = "";
 
 function poolKey(c: MysqlCredentials): string {
-  return `${c.host}:${c.port}/${c.database || ""}@${c.user}`;
+  return createHash("sha256").update(JSON.stringify([c.host, c.port, c.database, c.user, c.password])).digest("hex");
 }
 
 async function ensurePool(c: MysqlCredentials): Promise<Pool> {
@@ -104,9 +103,15 @@ export async function executeMetricQuery(
       return { ok: false, error: `MySQL connect failed: ${err instanceof Error ? err.message : String(err)}`, durationMs: Date.now() - t0 };
     }
 
+    let destroyed = false;
     try {
-      // Cap statement runtime server-side. Honoured by MySQL 5.7+ and MariaDB.
-      await conn.query(`SET STATEMENT max_execution_time = ${QUERY_TIMEOUT_MS} FOR SELECT 1`).catch(() => null);
+      // MySQL uses milliseconds; MariaDB uses seconds. The session limit must
+      // apply to the metric query itself, not to a separate SELECT 1 probe.
+      try {
+        await conn.query(`SET SESSION max_execution_time = ${QUERY_TIMEOUT_MS}`);
+      } catch {
+        await conn.query(`SET SESSION max_statement_time = ${QUERY_TIMEOUT_MS / 1000}`).catch(() => null);
+      }
 
       const [rowsRaw, fieldsRaw] = await conn.query<RowDataPacket[]>(
         { sql, timeout: QUERY_TIMEOUT_MS, rowsAsArray: false },
@@ -127,9 +132,14 @@ export async function executeMetricQuery(
         durationMs: Date.now() - t0,
       };
     } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code === "PROTOCOL_SEQUENCE_TIMEOUT" || code === "ETIMEDOUT") {
+        conn.destroy();
+        destroyed = true;
+      }
       return { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - t0 };
     } finally {
-      try { conn.release(); } catch { /* ignore */ }
+      if (!destroyed) conn.release();
     }
   });
 }
@@ -147,7 +157,7 @@ export async function fetchDataFreshness(): Promise<string | null> {
   if (!creds.ok) return null;
   try {
     const pool = await ensurePool(creds);
-    const [rows] = await pool.query<RowDataPacket[]>(FRESHNESS_SQL);
+    const [rows] = await pool.query<RowDataPacket[]>({ sql: FRESHNESS_SQL, timeout: QUERY_TIMEOUT_MS });
     const raw = (rows[0] as { as_of?: string | null } | undefined)?.as_of ?? null;
     // dateStrings:true → raw is already "YYYY-MM-DD HH:MM:SS" in DB-local time.
     const value = raw ? String(raw) : null;
@@ -184,14 +194,14 @@ export async function pingMysql(): Promise<{
   }
   try {
     const pool = await ensurePool(creds);
-    const [versionRows] = await pool.query<RowDataPacket[]>("SELECT VERSION() AS v");
+    const [versionRows] = await pool.query<RowDataPacket[]>({ sql: "SELECT VERSION() AS v", timeout: QUERY_TIMEOUT_MS });
     const version = String((versionRows[0] as { v: string } | undefined)?.v || "");
     // SHOW GRANTS reveals whether this user has any privileges beyond SELECT.
     // We don't fail if it errors (some setups disable it for non-admins) — just
     // surface "unknown" so the UI can show a softer warning.
     let isReadOnlyUser: boolean | null = null;
     try {
-      const [grants] = await pool.query<RowDataPacket[]>("SHOW GRANTS FOR CURRENT_USER()");
+      const [grants] = await pool.query<RowDataPacket[]>({ sql: "SHOW GRANTS FOR CURRENT_USER()", timeout: QUERY_TIMEOUT_MS });
       const writePrivs = /\b(ALL PRIVILEGES|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|SUPER|REPLACE|RELOAD|FILE)\b/i;
       isReadOnlyUser = !(grants as Array<Record<string, string>>).some((row) => {
         const text = Object.values(row).join(" ");

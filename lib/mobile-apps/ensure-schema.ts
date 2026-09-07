@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/local-db";
+import { repairMobileAppsJsonStorage } from "./repair-json-storage";
 
 let _ensured = false;
 
@@ -304,5 +305,6 @@ export async function ensureMobileAppsSchema(sql: ReturnType<typeof getSql>): Pr
       END IF;
     END $$;
   `.catch(() => null);
+  await repairMobileAppsJsonStorage(sql);
   _ensured = true;
 }

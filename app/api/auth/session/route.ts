@@ -79,7 +79,12 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
   }
   const role = await getSessionRole(session);
-  return NextResponse.json({ ok: true, user: session, role: role ?? "member" });
+  if (!role) {
+    const res = NextResponse.json({ ok: false, error: "Access has been revoked." }, { status: 403 });
+    res.cookies.set({ ...sessionCookieAttrs(0), value: "" });
+    return res;
+  }
+  return NextResponse.json({ ok: true, user: session, role });
 }
 
 /**

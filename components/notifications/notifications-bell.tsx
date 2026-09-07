@@ -377,7 +377,7 @@ function AssignedTab({
 
 function EmptyMentions({ diagnostics }: { diagnostics: Diagnostics | null }) {
   if (!diagnostics) {
-    return <p className="px-3 py-8 text-center text-xs text-muted-foreground">You're all caught up.</p>;
+    return <p className="px-3 py-8 text-center text-xs text-muted-foreground">You are all caught up.</p>;
   }
   if (!diagnostics.hasMatchingAssignee) {
     return (
@@ -385,7 +385,7 @@ function EmptyMentions({ diagnostics }: { diagnostics: Diagnostics | null }) {
         <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
           <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
           <div className="min-w-0">
-            <p className="font-medium text-foreground">Mentions won't reach you yet</p>
+            <p className="font-medium text-foreground">Mentions will not reach you yet</p>
             <p className="mt-1 text-muted-foreground">
               No board assignee has an email matching{" "}
               <span className="rounded bg-muted px-1 font-mono text-[10px]">{diagnostics.sessionEmail}</span>.
@@ -397,7 +397,7 @@ function EmptyMentions({ diagnostics }: { diagnostics: Diagnostics | null }) {
       </div>
     );
   }
-  return <p className="px-3 py-8 text-center text-xs text-muted-foreground">You're all caught up.</p>;
+  return <p className="px-3 py-8 text-center text-xs text-muted-foreground">You are all caught up.</p>;
 }
 
 function EmptyAssigned({ diagnostics }: { diagnostics: Diagnostics | null }) {

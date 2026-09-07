@@ -3,6 +3,15 @@
 All notable changes to Mission Control are documented here.
 
 
+## Unreleased ? 2026-09-07
+
+- Discover supported modules from installed skill capabilities; preserve enabled preferences when a skill is missing or disabled.
+- Make module disabling reversible and preserve all module data. New optional modules start disabled.
+- Add admin review notification settings for Outlook skill email and Telegram, with recipient validation, readiness, worker health and recent delivery outcomes.
+- Add resident review polling and a transactional per-recipient outbox, with duplicate suppression, bounded retries and uncertain-send handling.
+- See [review alert setup](docs/review-alerts.md) for activation and store timing limits.
+
+
 ## [4.0.0] - 2026-06-04
 
 ### Added — Ticket links (URLs & local paths)

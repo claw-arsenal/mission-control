@@ -37,7 +37,6 @@ type DirEntry = {
   modifiedAt: string;
 };
 
-type DocId = { id: string; relative_path: string };
 
 type Props = {
   open: boolean;

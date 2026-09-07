@@ -1,4 +1,54 @@
 import type { Store } from "@/lib/mobile-apps/types";
+import { countryName, toAlpha2 } from "./country-codes";
+import type { Listing, TerritoryRating } from "./detail-data";
+
+function nonnegative(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+export function normalizeTerritoryRatings(value: unknown): TerritoryRating[] {
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return []; }
+  }
+  if (!Array.isArray(value)) return [];
+  const territories = new Map<string, TerritoryRating>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || typeof raw.territory !== "string") continue;
+    const territory = toAlpha2(raw.territory) ?? raw.territory.trim().toLowerCase();
+    if (!territory) continue;
+    const avg = nonnegative(raw.avg);
+    const previous = territories.get(territory);
+    territories.set(territory, {
+      territory,
+      avg: avg != null && avg <= 5 ? avg : previous?.avg ?? null,
+      count: nonnegative(raw.count) ?? previous?.count ?? null,
+      review_count: nonnegative(raw.review_count) ?? previous?.review_count ?? null,
+    });
+  }
+  return [...territories.values()];
+}
+
+/** The selected value, country, and source must describe the same measurement. */
+export function selectRatingMeasurement(store: Store, listing: Listing | undefined, picked: string | null) {
+  const territories = normalizeTerritoryRatings(listing?.official_ratings);
+  const rated = territories.filter(territory => territory.avg != null);
+  const defaultTerritory = rated.find(territory => territory.territory === toAlpha2(listing?.country)) ?? rated[0];
+  const selectedEntry = territories.find(territory => territory.territory === picked) ?? defaultTerritory ?? null;
+  const selected = selectedEntry?.territory ?? null;
+  const fromReport = listing?.rating_source === "google_play_console_ratings_report";
+  const writtenOnly = listing?.rating_source === "google_reviews_api_fetched_reviews" || listing?.rating_source === "fetched_reviews";
+  const sourceCopy = ratingSourceCopy({ store, source: listing?.rating_source, asOf: listing?.rating_as_of });
+  const label = writtenOnly ? `${store === "google" ? "Google Play" : "App Store"} written-review average`
+    : selected ? `${countryName(selected)} · ${store === "google" ? "Google Play" : "App Store"} rating`
+      : sourceCopy.headline;
+  return {
+    territories, selected, selectedEntry, fromReport, writtenOnly, sourceCopy, label,
+    avg: writtenOnly ? listing?.current_rating ?? null : selectedEntry?.avg ?? null,
+    count: writtenOnly ? listing?.ratings_count ?? null : selectedEntry?.count ?? null,
+  };
+}
 
 export type RatingSource =
   | "google_play_console_ratings_report"

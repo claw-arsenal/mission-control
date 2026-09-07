@@ -14,6 +14,8 @@ import { CustomMonthAgenda, type AgendaCalendarEvent, type ViewMode } from "@/co
 import { AgendaFailedDialog } from "@/components/agenda/agenda-failed-bucket";
 import { useAgenda } from "@/hooks/use-agenda";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { parseRecurrenceRule } from "@/lib/agenda/recurrence";
 
 type Props = {
   onEditEvent?: (event: AgendaEventSummary) => void;
@@ -28,7 +30,7 @@ type Props = {
 };
 
 export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAddEvent, onDayClick, onEventDrop, agentsForDetails, headerActions, onInitialReady }: Props) {
-  const { calendarEvents, loading, loadEvents } = useAgenda();
+  const { calendarEvents, loading, refreshing, error, loadEvents } = useAgenda();
   const searchParams = useSearchParams();
   const [detailsSheetOpen, setDetailsSheetOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<AgendaEventSummary | null>(null);
@@ -37,6 +39,8 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
   const [failedCount, setFailedCount] = useState(0);
   const [failedDialogOpen, setFailedDialogOpen] = useState(false);
   const initialReadySentRef = useRef(false);
+  const detailRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => detailRequestRef.current?.abort(), []);
 
   // Compute the visible date range based on view mode
   const { rangeStart, rangeEnd } = useMemo(() => {
@@ -108,6 +112,7 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
   const sseStartedRef = useRef(false);
   const sseReconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFetchingRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   useEffect(() => {
     if (sseStartedRef.current) return;
@@ -121,12 +126,16 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
       sseRef.current = es;
 
       es.addEventListener("agenda_change", async () => {
-        if (isFetchingRef.current || !sseStartedRef.current) return;
+        if (!sseStartedRef.current) return;
+        refreshQueuedRef.current = true;
+        if (isFetchingRef.current) return;
         isFetchingRef.current = true;
         try {
-          // Use current visible range so the calendar stays stable during refetch
-          const { rangeStart, rangeEnd } = rangeRef.current;
-          await loadEvents(rangeStart, rangeEnd);
+          do {
+            refreshQueuedRef.current = false;
+            const { rangeStart, rangeEnd } = rangeRef.current;
+            await loadEvents(rangeStart, rangeEnd);
+          } while (refreshQueuedRef.current && sseStartedRef.current);
         } catch { /* ignore */ } finally {
           isFetchingRef.current = false;
           void checkFailed();
@@ -187,14 +196,18 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
 
   const handleEventClick = useCallback(
     async (eventId: string, occurrenceDate?: string) => {
+      detailRequestRef.current?.abort();
+      const controller = new AbortController();
+      detailRequestRef.current = controller;
       // Close any existing sheet first to force remount
       setDetailsSheetOpen(false);
       setSelectedEvent(null);
 
       try {
-        const res = await fetch(`/api/agenda/events/${eventId}`, { cache: "reload" });
+        const res = await fetch(`/api/agenda/events/${eventId}`, { cache: "no-store", signal: controller.signal });
         const json = await res.json();
-        if (!json.ok) return;
+        if (controller.signal.aborted) return;
+        if (!res.ok || !json.ok) throw new Error(json.error ?? "Could not open this event. Try again.");
 
         const evt = json.event as {
           id: string;
@@ -205,17 +218,20 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
           starts_at: string;
           ends_at: string | null;
           recurrence_rule: string | null;
+          recurrence_until: string | null;
+          execution_window_minutes: number | null;
+          dependency_timeout_hours: number | null;
           status: "draft" | "active";
         };
         const evtProcesses = (json.processes ?? []) as Array<{ process_name: string; process_version_id?: string }>;
-        const evtOccurrences = (json.occurrences ?? []) as Array<{ id: string; scheduled_for: string }>;
+        const evtOccurrences = (json.occurrences ?? []) as Array<{ id: string; scheduled_for: string; status: AgendaEventSummary["latestResult"] }>;
 
         const timezone = evt.timezone ?? "Europe/Amsterdam";
         const rawRecurrence = evt.recurrence_rule ?? "none";
         const recurrenceInfo = parseRecurrenceRule(rawRecurrence);
 
         // For recurring events, show the clicked occurrence date instead of the series start
-        const isRecurring = rawRecurrence !== "none";
+        const isRecurring = rawRecurrence !== "none" && rawRecurrence !== "null";
 
         // Find the occurrence matching the clicked date
         let occurrenceId: string | undefined;
@@ -259,7 +275,10 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
           recurrence: recurrenceInfo.type,
           recurrenceRule: rawRecurrence !== "none" ? rawRecurrence : null,
           nextRuns: [],
-          latestResult: null,
+          latestResult: evtOccurrences.find((occurrence) => occurrence.id === occurrenceId)?.status ?? null,
+          recurrenceUntil: evt.recurrence_until,
+          executionWindowMinutes: evt.execution_window_minutes ?? 30,
+          dependencyTimeoutHours: evt.dependency_timeout_hours ?? 0,
           occurrenceId,
           modelOverride: (evt as Record<string, unknown>).model_override as string ?? "",
           sessionTarget: ((evt as Record<string, unknown>).session_target === "main" ? "main" : "isolated") as "isolated" | "main",
@@ -271,8 +290,8 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
         setSelectedEvent(summary);
         setSheetKey((k) => k + 1);
         setDetailsSheetOpen(true);
-      } catch {
-        // ignore fetch errors
+      } catch (cause) {
+        if (!controller.signal.aborted) toast.error(cause instanceof Error ? cause.message : "Could not open this event. Try again.");
       }
     },
     []
@@ -320,9 +339,14 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
       <Card className="border-2 shadow-lg rounded-2xl py-0 h-full min-h-0 flex flex-col">
         <div className="flex items-center justify-between px-5 pt-4 pb-2 shrink-0">
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Calendar</span>
+          {refreshing && <span role="status" className="text-xs text-muted-foreground">Updating events…</span>}
           {headerActions && <div className="flex items-center gap-2">{headerActions}</div>}
         </div>
-        <CardContent className="px-5 pb-5 pt-2 flex-1 min-h-0 overflow-hidden">
+        {error && <div role="alert" className="mx-3 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm sm:mx-5">
+          <p className="min-w-0 flex-1">{calendarEvents.length ? "Calendar could not refresh. Showing the last loaded events. " : "Calendar could not load. "}{error}</p>
+          <Button variant="outline" size="sm" disabled={loading || refreshing} onClick={() => void loadEvents(rangeStart, rangeEnd)}>Try again</Button>
+        </div>}
+        <CardContent className="px-3 pb-3 pt-2 sm:px-5 sm:pb-5 flex-1 min-h-0 overflow-hidden">
           <CustomMonthAgenda
             events={eventsForCalendar}
             loading={loading}
@@ -364,25 +388,6 @@ export function AgendaPageClient({ onEditEvent, onCopyEvent, onDeleteEvent, onAd
 }
 
 // ── Helpers (duplicated here to avoid circular dep from useAgenda) ─────────────
-
-function parseRecurrenceRule(rule: string | null | undefined): {
-  type: "none" | "daily" | "weekly" | "monthly";
-  weekdays: string[];
-} {
-  if (!rule || rule === "none") return { type: "none", weekdays: [] };
-  const dayMap: Record<string, string> = {
-    SU: "0", MO: "1", TU: "2", WE: "3", TH: "4", FR: "5", SA: "6",
-  };
-  const bydayMatch = rule.match(/BYDAY=([^;]+)/);
-  if (bydayMatch) {
-    const days = bydayMatch[1].split(",").map((d) => dayMap[d] ?? d);
-    return { type: "weekly", weekdays: days };
-  }
-  if (rule.includes("FREQ=DAILY")) return { type: "daily", weekdays: [] };
-  if (rule.includes("FREQ=WEEKLY")) return { type: "weekly", weekdays: [] };
-  if (rule.includes("FREQ=MONTHLY")) return { type: "monthly", weekdays: [] };
-  return { type: "none", weekdays: [] };
-}
 
 function extractDateTimeFields(isoString: string | null | undefined, timezone: string) {
   if (!isoString) return { date: "", time: "" };

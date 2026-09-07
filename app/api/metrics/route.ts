@@ -4,6 +4,8 @@ import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
 import { guardSelectOnly, bindNamedParams } from "@/lib/metrics/sql-guard";
 import { executeMetricQuery } from "@/lib/metrics/mysql";
+import { metricDefinitionSchema, parseMetricImport, exportMetric, type MetricDef } from "@/lib/metrics/definition";
+import { saveMetric, importMetrics } from "@/lib/metrics/store";
 import { isValidWindow, resolveWindow, type WindowName } from "@/lib/metrics/window";
 
 export const dynamic = "force-dynamic";
@@ -76,18 +78,13 @@ async function ensureSchema(sql: ReturnType<typeof getSql>) {
 
   await sql`CREATE INDEX IF NOT EXISTS metric_runs_metric_idx ON metric_runs(metric_id, occurred_at desc)`;
 
+  await sql`ALTER TABLE metrics
+    ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'General',
+    ADD COLUMN IF NOT EXISTS notes text NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS value_format text NOT NULL DEFAULT 'auto',
+    ADD COLUMN IF NOT EXISTS trend_direction text NOT NULL DEFAULT 'neutral',
+    ADD COLUMN IF NOT EXISTS kpi_aggregation text NOT NULL DEFAULT 'sum'`;
   _schemaEnsured = true;
-}
-
-const VALID_CHART_TYPES = new Set(["bar", "line", "area", "pie", "donut", "kpi"]);
-
-function sanitizeYColumns(input: unknown): string[] {
-  if (!Array.isArray(input)) return [];
-
-  return input
-    .map((v) => String(v || "").trim())
-    .filter((v) => v.length > 0 && v.length < 100)
-    .slice(0, 10);
 }
 
 export async function GET() {
@@ -118,6 +115,7 @@ export async function GET() {
         x_column,
         y_columns,
         default_window,
+        category, notes, value_format, trend_direction, kpi_aggregation,
         position,
         created_by_name,
         created_by_email,
@@ -154,162 +152,46 @@ export async function POST(request: Request) {
 
     if (!wid) return fail("Workspace not found", 500);
 
-    const body = (await request.json()) as Json;
+    let body: Json;
+    try { body = await request.json(); } catch { return fail("Invalid JSON body.", 422); }
+    if (!body || typeof body !== "object" || Array.isArray(body)) return fail("Expected a JSON object.", 422);
     const action = String(body.action || "");
     const actor = {
       name: session.name?.trim() || null,
       email: session.email.toLowerCase(),
     };
 
-    if (action === "createMetric") {
-      const name = String(body.name || "").trim();
-      const description = body.description ? String(body.description).trim() : null;
-      const sqlText = String(body.sql || body.sqlText || "").trim();
-      const chartType = String(body.chartType || "bar");
-      const xColumn = String(body.xColumn || "").trim();
-      const yColumns = sanitizeYColumns(body.yColumns);
-      const defaultWindow = isValidWindow(body.defaultWindow)
-        ? (body.defaultWindow as WindowName)
-        : "monthly";
-
-      if (!name) return fail("Name is required.");
-      if (!sqlText) return fail("SQL is required.");
-      if (!VALID_CHART_TYPES.has(chartType)) return fail(`Invalid chart type: ${chartType}`);
-
-      const guard = guardSelectOnly(sqlText);
-
-      if (!guard.ok) return fail(guard.reason);
-
-      const posRow = await sql`
-        select coalesce(max(position), -1) + 1 as pos
-        from metrics
-        where workspace_id = ${wid}
-      `;
-
-      const position = Number((posRow as unknown as Array<{ pos: number }>)[0]?.pos ?? 0);
-
-      const rows = await sql`
-        insert into metrics (
-          workspace_id,
-          name,
-          description,
-          sql_text,
-          chart_type,
-          x_column,
-          y_columns,
-          default_window,
-          position,
-          created_by_email,
-          created_by_name,
-          updated_by_email,
-          updated_by_name
-        ) values (
-          ${wid},
-          ${name},
-          ${description},
-          ${guard.cleaned},
-          ${chartType},
-          ${xColumn},
-          ${sql.array(yColumns)},
-          ${defaultWindow},
-          ${position},
-          ${actor.email},
-          ${actor.name},
-          ${actor.email},
-          ${actor.name}
-        )
-        returning id::text, name, chart_type
-      `;
-
-      return ok({ metric: (rows as unknown as Array<Record<string, unknown>>)[0] });
+    if (action === "importMetrics") {
+      let entries;
+      try { entries = parseMetricImport(body.metrics); } catch (error) { return fail(error instanceof Error ? error.message : "Invalid import.", 422); }
+      for (const entry of entries) {
+        const guard = guardSelectOnly(entry.query);
+        if (!guard.ok) return fail(`${entry.title}: ${guard.reason}`, 422);
+        entry.query = guard.cleaned;
+      }
+      const counts = await importMetrics(sql, wid, entries, actor, body.replaceExisting === true);
+      return ok(counts);
     }
 
-    if (action === "updateMetric") {
-      const id = String(body.id || "");
-
-      if (!id) return fail("Metric id is required.");
-
-      const patch: Record<string, unknown> = {};
-
-      if (typeof body.name === "string") patch.name = body.name.trim();
-
-      if (body.description !== undefined) {
-        patch.description = body.description ? String(body.description) : null;
+    if (action === "createMetric" || action === "updateMetric") {
+      const updating = action === "updateMetric";
+      const id = typeof body.id === "string" ? body.id : "";
+      let previous = {};
+      if (updating) {
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return fail("A valid metric id is required.", 422);
+        const rows = await sql`select * from metrics where id = ${id} and workspace_id = ${wid}`;
+        if (!rows[0]) return fail("Metric not found.", 404);
+        previous = exportMetric(rows[0] as unknown as MetricDef);
       }
-
-      if (typeof body.sql === "string" || typeof body.sqlText === "string") {
-        const sqlText = String(body.sql ?? body.sqlText).trim();
-        const guard = guardSelectOnly(sqlText);
-
-        if (!guard.ok) return fail(guard.reason);
-
-        patch.sql_text = guard.cleaned;
-      }
-
-      if (typeof body.chartType === "string") {
-        if (!VALID_CHART_TYPES.has(body.chartType)) {
-          return fail(`Invalid chart type: ${body.chartType}`);
-        }
-
-        patch.chart_type = body.chartType;
-      }
-
-      if (typeof body.xColumn === "string") patch.x_column = body.xColumn.trim();
-      if (Array.isArray(body.yColumns)) patch.y_columns = sanitizeYColumns(body.yColumns);
-      if (isValidWindow(body.defaultWindow)) patch.default_window = body.defaultWindow;
-
-      if (Object.keys(patch).length === 0) return fail("Nothing to update.");
-
-      if (patch.name !== undefined) {
-        await sql`update metrics set name = ${patch.name as string} where id = ${id}`;
-      }
-
-      if (patch.description !== undefined) {
-        await sql`
-          update metrics
-          set description = ${patch.description as string | null}
-          where id = ${id}
-        `;
-      }
-
-      if (patch.sql_text !== undefined) {
-        await sql`update metrics set sql_text = ${patch.sql_text as string} where id = ${id}`;
-      }
-
-      if (patch.chart_type !== undefined) {
-        await sql`update metrics set chart_type = ${patch.chart_type as string} where id = ${id}`;
-      }
-
-      if (patch.x_column !== undefined) {
-        await sql`update metrics set x_column = ${patch.x_column as string} where id = ${id}`;
-      }
-
-      if (patch.y_columns !== undefined) {
-        await sql`
-          update metrics
-          set y_columns = ${sql.array(patch.y_columns as string[])}
-          where id = ${id}
-        `;
-      }
-
-      if (patch.default_window !== undefined) {
-        await sql`
-          update metrics
-          set default_window = ${patch.default_window as string}
-          where id = ${id}
-        `;
-      }
-
-      await sql`
-        update metrics
-        set
-          updated_at = now(),
-          updated_by_email = ${actor.email},
-          updated_by_name = ${actor.name}
-        where id = ${id}
-      `;
-
-      return ok();
+      const fields: Record<string, unknown> = { ...previous };
+      const mapping: Record<string, string> = { name: "title", description: "description", sql: "query", sqlText: "query", chartType: "chart", xColumn: "xColumn", yColumns: "yColumns", defaultWindow: "timerange", category: "category", notes: "notes", valueFormat: "valueFormat", trendDirection: "trendDirection", kpiAggregation: "kpiAggregation" };
+      for (const [key, target] of Object.entries(mapping)) if (body[key] !== undefined) fields[target] = body[key];
+      const parsed = metricDefinitionSchema.safeParse(fields);
+      if (!parsed.success) return fail(parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join(" "), 422);
+      const guard = guardSelectOnly(parsed.data.query);
+      if (!guard.ok) return fail(guard.reason, 422);
+      const metric = await saveMetric(sql, wid, { ...parsed.data, query: guard.cleaned }, actor, updating ? id : undefined);
+      return ok({ metric });
     }
 
     if (action === "deleteMetric") {
@@ -317,7 +199,7 @@ export async function POST(request: Request) {
 
       if (!id) return fail("Metric id is required.");
 
-      await sql`delete from metrics where id = ${id}`;
+      await sql`delete from metrics where id = ${id} and workspace_id = ${wid}`;
 
       return ok();
     }
@@ -329,7 +211,7 @@ export async function POST(request: Request) {
         await sql`
           update metrics
           set position = ${i}, updated_at = now()
-          where id = ${ids[i]}
+          where id = ${ids[i]} and workspace_id = ${wid}
         `;
       }
 
@@ -364,7 +246,7 @@ export async function POST(request: Request) {
         const rows = (await sql`
           select sql_text
           from metrics
-          where id = ${metricId}
+          where id = ${metricId} and workspace_id = ${wid}
           limit 1
         `) as unknown as Array<{ sql_text: string }>;
 

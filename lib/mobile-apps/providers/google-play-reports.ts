@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { parse } from "csv-parse";
 import { Storage } from "@google-cloud/storage";
 import type { GoogleConfig } from "@/lib/mobile-apps/config";
@@ -599,15 +600,22 @@ export async function fetchStorePerformanceTrafficSource(
 // rows incrementally so the caller can batch-insert and discard as it goes.
 
 /** Decode a byte stream as UTF-16LE (Google's report encoding) or UTF-8, incrementally. */
-function createDecodeTransform(): Transform {
+function createDecodeTransform(maxBytes: number): Transform {
   let decoder: TextDecoder | null = null;
+  let prefix: Buffer = Buffer.alloc(0);
+  let bytesRead = 0;
   return new Transform({
     decodeStrings: false,
     transform(chunk: Buffer, _enc, cb) {
       try {
+        bytesRead += chunk.length;
+        if (bytesRead > maxBytes) throw new Error("Report byte limit exceeded while downloading.");
         if (!decoder) {
+          chunk = Buffer.concat([prefix, chunk]);
+          if (chunk.length < 2) { prefix = chunk; cb(); return; }
           const utf16 = chunk.length >= 2 && chunk[0] === 0xff && chunk[1] === 0xfe;
-          decoder = new TextDecoder(utf16 ? "utf-16le" : "utf-8");
+          decoder = new TextDecoder(utf16 ? "utf-16le" : "utf-8", { fatal: true });
+          prefix = Buffer.alloc(0);
         }
         cb(null, decoder.decode(chunk, { stream: true }));
       } catch (e) {
@@ -616,7 +624,7 @@ function createDecodeTransform(): Transform {
     },
     flush(cb) {
       try {
-        cb(null, decoder ? decoder.decode() : "");
+        cb(null, decoder ? decoder.decode() : new TextDecoder("utf-8", { fatal: true }).decode(prefix));
       } catch (e) {
         cb(e as Error);
       }
@@ -631,11 +639,15 @@ function createDecodeTransform(): Transform {
 export async function* streamCsvRows(cfg: GoogleConfig, objectPath: string): AsyncGenerator<Record<string, string>> {
   const bucketName = normalizeBucketName(cfg.reportsBucket);
   const read = reportsBucket(cfg).file(objectPath).createReadStream();
+  const decode = createDecodeTransform(cfg.reportsMaxFileBytes);
   const parser = parse({ columns: true, skip_empty_lines: true, trim: true, relax_column_count: true, relax_quotes: true });
-  read.on("error", (e) => parser.destroy(e));
-  read.pipe(createDecodeTransform()).pipe(parser);
+  // Attach the rejection handler immediately: decoder/parser failures must also
+  // stop the download, including when the consumer exits before EOF.
+  const completed = pipeline(read, decode, parser).then(() => null, error => error as Error);
   try {
     for await (const rec of parser) yield rec as Record<string, string>;
+    const error = await completed;
+    if (error) throw error;
   } catch (err) {
     const code = (err as { code?: number }).code;
     if (code === 404) throw new ReportError(`report file not found: ${objectPath}`, "missing");
@@ -643,6 +655,9 @@ export async function* streamCsvRows(cfg: GoogleConfig, objectPath: string): Asy
     throw new ReportError(`could not stream report ${objectPath}: ${err instanceof Error ? err.message : String(err)}`, "unknown");
   } finally {
     read.destroy();
+    decode.destroy();
+    parser.destroy();
+    await completed;
   }
 }
 

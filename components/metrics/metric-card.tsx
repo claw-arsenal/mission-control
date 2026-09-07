@@ -1,284 +1,91 @@
-"use client";
+﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ChevronDownIcon, Loader2Icon, MoreHorizontalIcon, PencilIcon, RefreshCwIcon, Trash2Icon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DownloadIcon, MoreHorizontalIcon, PencilIcon, RefreshCwIcon, Trash2Icon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MetricChart } from "@/components/metrics/metric-chart";
-import { describeWindow, usesWindow, usesBucket } from "@/lib/metrics/window";
-import { computeBucketDelta, formatBucketLabel, parseDbDateTime } from "@/lib/metrics/delta";
-import { makeLimiter } from "@/lib/metrics/limiter";
+import { MetricChart } from "./metric-chart";
+import { MetricHelp } from "./metric-help";
+import { describeWindow, usesWindow, usesBucket, type WindowName } from "@/lib/metrics/window";
+import { computeBucketDelta, formatBucketLabel, parseDbDateTime, parseBucketStart, bucketEnd } from "@/lib/metrics/delta";
+import { downloadMetricFile, formatMetricValue, isPercentColumn, metricCsv } from "@/lib/metrics/presentation";
+import { useMetricQuery } from "@/hooks/use-metric-query";
+import type { MetricDef } from "@/lib/metrics/definition";
+export type { MetricDef } from "@/lib/metrics/definition";
 
-// Shared across every card instance: load a few at a time instead of firing
-// one request per card the moment the page mounts. Pairs with the server-side
-// gate in lib/metrics/mysql.ts.
-const cardGate = makeLimiter(3);
+export const METRIC_WINDOWS = ["hourly", "daily", "weekly", "monthly", "yearly"] as const;
+type Props = { metric: MetricDef; globalWindow: WindowName | "saved"; refreshKey?: number; dataAsOf?: string | null; onEdit: () => void; onDelete: () => void };
 
-export type MetricDef = {
-  id: string;
-  name: string;
-  description: string | null;
-  sql_text: string;
-  chart_type: "bar" | "line" | "area" | "pie" | "donut" | "kpi";
-  x_column: string;
-  y_columns: string[];
-  default_window: WindowName;
-  updated_by_name: string | null;
-  updated_at: string;
-};
-
-type WindowName = "hourly" | "daily" | "weekly" | "monthly" | "yearly" | "custom";
-
-type Props = {
-  metric: MetricDef;
-  globalWindow: WindowName;
-  /** Backup-DB freshness (max timestamp), so deltas ignore not-yet-synced buckets. */
-  dataAsOf?: string | null;
-  onEdit: () => void;
-  onDelete: () => void;
-};
-
-const WINDOW_PILLS: Array<{ key: WindowName; label: string }> = [
-  { key: "hourly", label: "Hour" },
-  { key: "daily", label: "Day" },
-  { key: "weekly", label: "Week" },
-  { key: "monthly", label: "Month" },
-  { key: "yearly", label: "Year" },
-];
-
-// Snapshot lookback options (no time bucket): the same windows, framed as a
-// range to look back over rather than a granularity to bucket by.
-const LOOKBACK_OPTIONS: WindowName[] = ["hourly", "daily", "weekly", "monthly", "yearly"];
-
-/** Compact "data through" timestamp for the freshness note. */
-function fmtAsOf(d: Date): string {
-  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+function ResultTable({ rows, metric }: { rows: Record<string, unknown>[]; metric: MetricDef }) {
+  const [limit, setLimit] = useState(25);
+  const columns = [...new Set([metric.x_column, ...metric.y_columns, ...Object.keys(rows[0] ?? {})].filter(Boolean))];
+  return <div>
+    <div className="max-h-96 overflow-auto rounded-md border" tabIndex={0} role="region" aria-label={`${metric.name} data, scroll for more columns`}>
+      <table className="w-full text-left text-xs"><caption className="sr-only">{metric.name}, all returned columns. Missing values are unavailable, not zero.</caption>
+        <thead className="sticky top-0 bg-muted"><tr>{columns.map(column => <th key={column} scope="col" className="whitespace-nowrap px-3 py-2.5 font-medium">{column}</th>)}</tr></thead>
+        <tbody>{rows.slice(0, limit).map((row, index) => <tr key={index} className="border-t hover:bg-muted/40">{columns.map(column => <td key={column} className="max-w-64 whitespace-nowrap px-3 py-2.5 tabular-nums">{column === metric.x_column || (!metric.y_columns.includes(column) && typeof row[column] !== "number") ? String(row[column] ?? "Not available") : formatMetricValue(row[column], column, metric.y_columns.includes(column) ? metric.value_format : "auto")}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{Math.min(limit, rows.length)} of {rows.length} rows</span>{limit < rows.length && <Button size="sm" variant="outline" onClick={() => setLimit(value => value + 25)}>Show 25 more</Button>}
+      <Button size="sm" variant="ghost" onClick={() => downloadMetricFile(metricCsv(rows, columns), `${metric.name.replace(/[^a-z0-9_-]/gi, "-")}.csv`, "text/csv;charset=utf-8")}><DownloadIcon className="size-3.5" /> Download CSV</Button>
+    </div>
+  </div>;
 }
 
-export function MetricCard({ metric, globalWindow, dataAsOf = null, onEdit, onDelete }: Props) {
+export function MetricCard({ metric, globalWindow, refreshKey = 0, dataAsOf = null, onEdit, onDelete }: Props) {
+  const id = useId();
   const [override, setOverride] = useState<WindowName | "inherit">("inherit");
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  // Start true: a load always fires on mount (often queued behind the shared
-  // gate), so the body should show "Loading…" rather than "No rows to render".
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{ durationMs: number; rowCount: number; truncated: boolean } | null>(null);
-
-  // Three control modes, by what the SQL actually references:
-  //  - bucketed  (:bucket)            → real time series → granularity pills
-  //  - windowed  (:since/:until only) → snapshot         → single range selector
-  //  - neither                        → lifetime         → no control at all
-  // Windowless metrics ignore the window entirely (identical result regardless),
-  // so we pin to a stable value to keep the per-window cache key constant.
+  const [view, setView] = useState<"chart" | "table">("chart");
   const windowed = usesWindow(metric.sql_text);
   const bucketed = usesBucket(metric.sql_text);
-
-  const effectiveWindow: WindowName = !windowed
-    ? "monthly"
-    : override !== "inherit"
-      ? override
-      : globalWindow;
-
-  // Period-over-period delta (time-series only): change between the last two
-  // COMPLETE buckets, excluding any the backup hasn't fully synced yet.
+  const selected = override !== "inherit" ? override : globalWindow === "saved" ? metric.default_window : globalWindow;
+  const effectiveWindow = !windowed || selected === "custom" ? "monthly" : selected;
+  const { result, loading, error, refresh } = useMetricQuery(metric, effectiveWindow, refreshKey);
   const asOf = useMemo(() => parseDbDateTime(dataAsOf), [dataAsOf]);
-  const yCol = metric.y_columns[0] ?? "";
-  const delta = useMemo(
-    () => (bucketed && yCol ? computeBucketDelta({ rows, xColumn: metric.x_column, yColumn: yCol, window: effectiveWindow, asOf }) : null),
-    [bucketed, yCol, rows, metric.x_column, effectiveWindow, asOf],
-  );
+  const yColumn = metric.y_columns[0] ?? "";
+  const delta = useMemo(() => bucketed && result && yColumn && !result.truncated ? computeBucketDelta({ rows: result.rows, xColumn: metric.x_column, yColumn, window: effectiveWindow, asOf }) : null, [bucketed, result, yColumn, metric.x_column, effectiveWindow, asOf]);
+  const partialCount = bucketed && result ? result.rows.filter(row => {
+    const start = parseBucketStart(String(row[metric.x_column]), effectiveWindow);
+    return start && asOf && bucketEnd(start, effectiveWindow) > asOf;
+  }).length : 0;
+  const direction = metric.trend_direction || "neutral";
+  const favorable = delta && direction !== "neutral" && delta.delta !== 0 ? (delta.delta > 0) === (direction === "higher") : null;
+  const scope = !windowed ? "All available history" : `${describeWindow(effectiveWindow).range}${bucketed ? ` · ${describeWindow(effectiveWindow).granularity} groups` : ""}`;
 
-  // We cache per-window so re-pressing a pill doesn't re-hit MySQL.
-  const cache = useRef<Map<string, { rows: Record<string, unknown>[]; meta: NonNullable<typeof meta> }>>(new Map());
-
-  const load = useCallback(async (window: WindowName, fresh = false) => {
-    if (!fresh) {
-      const cached = cache.current.get(window);
-      if (cached) {
-        setRows(cached.rows);
-        setMeta(cached.meta);
-        setError(null);
-        setLoading(false);
-        return;
-      }
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const j = await cardGate(async () => {
-        const res = await fetch("/api/metrics", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "runMetric", metricId: metric.id, window }),
-        });
-        return res.json();
-      });
-      if (!j.ok) {
-        setError(j.error || "Query failed.");
-        setRows([]);
-        return;
-      }
-      const next = j.rows || [];
-      const m = { durationMs: j.durationMs ?? 0, rowCount: j.rowCount ?? 0, truncated: Boolean(j.truncated) };
-      cache.current.set(window, { rows: next, meta: m });
-      setRows(next);
-      setMeta(m);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed.");
-    } finally {
-      setLoading(false);
-    }
-  }, [metric.id]);
-
-  useEffect(() => {
-    void load(effectiveWindow);
-  }, [effectiveWindow, load]);
-
-  return (
-    <div className="flex flex-col rounded-xl border bg-card overflow-hidden">
-      <header className="flex items-start gap-3 px-4 py-3 border-b">
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-semibold">{metric.name}</h3>
-          {metric.description && (
-            <p className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">{metric.description}</p>
-          )}
-          {meta && (
-            <p className="mt-1 text-[10px] text-muted-foreground/70 tabular-nums">
-              {bucketed
-                ? `${describeWindow(effectiveWindow).range} · ${describeWindow(effectiveWindow).granularity} · `
-                : windowed
-                  ? `${describeWindow(effectiveWindow).range} · `
-                  : ""}{meta.rowCount} rows · {meta.durationMs}ms{meta.truncated ? " · truncated" : ""}
-            </p>
-          )}
-          {delta && (
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-semibold tabular-nums",
-                  delta.delta > 0
-                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                    : delta.delta < 0
-                      ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
-                      : "bg-muted text-muted-foreground",
-                )}
-                title={`${yCol}: ${delta.previous.toLocaleString()} → ${delta.current.toLocaleString()}`}
-              >
-                {delta.delta > 0 ? <TrendingUpIcon className="size-3" /> : delta.delta < 0 ? <TrendingDownIcon className="size-3" /> : null}
-                {delta.delta > 0 ? "+" : ""}{delta.delta.toLocaleString()}
-              </span>
-              <span className="text-muted-foreground/70">
-                {formatBucketLabel(delta.previousLabel, effectiveWindow)} → {formatBucketLabel(delta.currentLabel, effectiveWindow)}
-              </span>
-            </div>
-          )}
-          {bucketed && asOf && (
-            <p className="mt-0.5 text-[10px] text-muted-foreground/55 tabular-nums">
-              data through {fmtAsOf(asOf)}
-              {delta && delta.excluded > 0 ? ` · ${delta.excluded} in-progress bucket${delta.excluded > 1 ? "s" : ""} excluded` : ""}
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void load(effectiveWindow, true)}
-            disabled={loading}
-            aria-label="Refresh"
-            title="Refresh"
-          >
-            {loading
-              ? <Loader2Icon className="size-3.5 animate-spin" />
-              : <RefreshCwIcon className="size-3.5" />}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="More"><MoreHorizontalIcon className="size-3.5" /></Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={onEdit}><PencilIcon className="size-3.5" /> Edit</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onClick={onDelete}>
-                <Trash2Icon className="size-3.5" /> Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </header>
-
-      {bucketed ? (
-        // Real time series: pick how to bucket time.
-        <div className="flex items-center gap-1 border-b bg-muted/[0.04] px-3 py-2">
-          {WINDOW_PILLS.map((p) => {
-            const active = effectiveWindow === p.key;
-            return (
-              <button
-                key={p.key}
-                onClick={() => setOverride(p.key)}
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider transition-colors",
-                  active
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                )}
-              >
-                {p.label}
-              </button>
-            );
-          })}
-        </div>
-      ) : windowed ? (
-        // Windowed snapshot (e.g. a category donut): no time buckets exist, so a
-        // granularity picker would be misleading. Offer the lookback range only.
-        <div className="flex items-center gap-2 border-b bg-muted/[0.04] px-3 py-2">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">Range</span>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-medium text-foreground transition-colors hover:bg-accent"
-                title="How far back to look — this metric has no time buckets, so only the range matters"
-              >
-                {describeWindow(effectiveWindow).range}
-                <ChevronDownIcon className="size-3" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              {LOOKBACK_OPTIONS.map((w) => (
-                <DropdownMenuItem key={w} onClick={() => setOverride(w)}>
-                  {describeWindow(w).range}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      ) : null}
-
-      <div className="flex-1 min-h-[260px] p-3">
-        {error ? (
-          <pre className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[11px] text-destructive whitespace-pre-wrap">
-            {error}
-          </pre>
-        ) : loading && rows.length === 0 ? (
-          <div className="flex h-full min-h-[180px] items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" /> Loading…
-          </div>
-        ) : (
-          <MetricChart
-            type={metric.chart_type}
-            xColumn={metric.x_column}
-            yColumns={metric.y_columns}
-            rows={rows}
-          />
-        )}
+  return <article aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card">
+    <header className="px-4 pt-4">
+      <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><p className="mb-1 text-xs text-muted-foreground">{metric.category || (bucketed ? "Trends" : "Breakdowns")}</p><h2 id={`${id}-title`} className="break-words text-base font-semibold leading-snug">{metric.name}</h2></div>
+        <MetricHelp label={metric.name}><p className="whitespace-pre-wrap">{metric.description || "This metric displays the values returned by its saved query. Add a description in Edit metric."}</p><p>Open “Definition & interpretation” below for the full method and query.</p></MetricHelp>
+        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={`Actions for ${metric.name}`}><MoreHorizontalIcon className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => void refresh()} disabled={loading}><RefreshCwIcon className="size-4" /> Refresh metric</DropdownMenuItem><DropdownMenuItem onClick={onEdit}><PencilIcon className="size-4" /> Edit metric</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem variant="destructive" onClick={onDelete}><Trash2Icon className="size-4" /> Delete metric</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
       </div>
+      {metric.description && <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">{metric.description}</p>}
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t py-3">
+        {windowed ? <><label htmlFor={`${id}-range`} className="sr-only">Time range for {metric.name}</label><select id={`${id}-range`} value={override} onChange={event => setOverride(event.target.value as WindowName | "inherit")} className="min-w-0 max-w-full rounded-md border bg-background px-2 py-1.5 text-xs">
+          <option value="inherit">{globalWindow === "saved" ? "Saved default" : "Follow dashboard"}: {describeWindow(effectiveWindow).range}</option>
+          {METRIC_WINDOWS.map(window => <option key={window} value={window}>{describeWindow(window).range}{bucketed ? ` · ${describeWindow(window).granularity}` : ""}</option>)}
+        </select><MetricHelp label="Time range"><p>{scope}.</p><p>{bucketed ? "Each point groups records into an hour, day, week, month, or year. Changing the range changes both the lookback and the size of these groups." : "Categories are counted across the entire range. These are not daily counts."}</p><p>Choose “Follow dashboard” or “Saved default” to remove this card’s override.</p></MetricHelp></> : <span className="rounded-md bg-muted px-2 py-1.5 text-xs">All available history</span>}
+        <div className="ml-auto flex gap-1" role="group" aria-label={`View for ${metric.name}`}>{(["chart", "table"] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => setView(mode)} className={cn("rounded-md px-2.5 py-1.5 text-xs capitalize", view === mode ? "bg-secondary font-medium" : "text-muted-foreground hover:bg-accent")}>{mode}</button>)}</div>
+      </div>
+    </header>
+    {delta && <div className="mx-4 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <span className={cn("inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold tabular-nums", favorable === true ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : favorable === false ? "bg-rose-500/10 text-rose-700 dark:text-rose-400" : "bg-muted text-foreground")}>
+        {delta.delta > 0 ? <TrendingUpIcon className="size-3.5" /> : delta.delta < 0 ? <TrendingDownIcon className="size-3.5" /> : null}{delta.delta > 0 ? "+" : ""}{formatMetricValue(delta.delta, "", "number")}{isPercentColumn(yColumn, metric.value_format) ? " pp" : ""}
+      </span><span className="text-muted-foreground">{yColumn} · {formatBucketLabel(delta.previousLabel, effectiveWindow)} to {formatBucketLabel(delta.currentLabel, effectiveWindow)}</span>
+      <MetricHelp label="Change between periods"><p>{formatMetricValue(delta.previous, yColumn, metric.value_format)} became {formatMetricValue(delta.current, yColumn, metric.value_format)}.</p><p>{isPercentColumn(yColumn, metric.value_format) ? "pp means percentage points: 20% to 25% is +5 pp, a 25% relative increase." : "This is the absolute difference, not a percentage change."}</p><p>Compares adjacent, elapsed periods. The latest session timestamp is a cutoff estimate, not proof that every table is fully synced. Without a timestamp, the final returned period is excluded.</p><p>{direction === "neutral" ? "Direction is neutral; an increase is not automatically good." : `${direction === "higher" ? "Higher" : "Lower"} is marked as favorable in this metric’s settings.`}</p></MetricHelp>
+    </div>}
+    <div className="min-w-0 flex-1 px-3 pb-3" aria-busy={loading}>
+      {error && <div role="alert" className="mb-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><p className="font-medium">{result ? "Refresh failed. Showing the last successful result." : "This metric could not load."}</p><p className="mt-1 break-words text-muted-foreground">{error}</p><Button variant="outline" size="sm" onClick={() => void refresh()} className="mt-2">Try again</Button></div>}
+      {loading && !result ? <div role="status" className="min-h-64 space-y-5 p-5"><p className="text-sm text-muted-foreground">Loading {metric.name}…</p><div className="h-40 rounded-md bg-muted motion-safe:animate-pulse" /></div> : result ? view === "table" ? <ResultTable key={result.loadedAt} rows={result.rows} metric={metric} /> : <MetricChart type={metric.chart_type} xColumn={metric.x_column} yColumns={metric.y_columns} rows={result.rows} valueFormat={metric.value_format} kpiAggregation={metric.kpi_aggregation} sql={metric.sql_text} /> : null}
+      {result?.truncated && <p role="status" className="mt-3 rounded-md border border-amber-500/40 p-2 text-xs">Result limit reached. Totals and shares cover only returned rows. Narrow the range or aggregate in SQL before interpreting this chart.</p>}
+      {partialCount > 0 && <p className="mt-3 text-xs text-muted-foreground">{partialCount} period{partialCount === 1 ? " is" : "s are"} still open at the latest session timestamp. These points may be partial and are excluded from the change above.</p>}
     </div>
-  );
+    <details className="border-t px-4 py-3 text-sm"><summary className="cursor-pointer font-medium">Definition & interpretation</summary><div className="mt-3 space-y-4 leading-relaxed text-muted-foreground">
+      <p className="whitespace-pre-wrap">{metric.description || "No definition yet. Add one in the metric editor."}</p>
+      {metric.notes && <div><h3 className="mb-1 font-medium text-foreground">How to read it</h3><p className="whitespace-pre-wrap">{metric.notes}</p></div>}
+      <dl className="grid gap-2 text-xs"><div><dt className="font-medium text-foreground">Scope</dt><dd>{scope}. {windowed ? "The query controls which records are included." : "Dashboard time controls do not affect this query."}</dd></div><div><dt className="font-medium text-foreground">Missing values</dt><dd>Unavailable values stay missing. A gap is not a zero. Distinct counts across groups may overlap.</dd></div></dl>
+      <details><summary className="cursor-pointer text-xs font-medium text-foreground">View SQL query</summary><pre className="mt-2 max-h-72 overflow-auto rounded-md bg-muted p-3 text-xs">{metric.sql_text}</pre></details>
+    </div></details>
+    <footer className="flex flex-wrap items-center justify-between gap-2 border-t bg-muted/20 px-4 py-2.5 text-xs text-muted-foreground"><span role="status">{loading ? result ? "Refreshing, previous result remains visible…" : "Queued or loading…" : result ? `${result.rowCount.toLocaleString()} rows · ${(result.durationMs / 1000).toFixed(1)} s` : "No successful result"}</span>{result && <span>Loaded {new Date(result.loadedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>}</footer>
+  </article>;
 }

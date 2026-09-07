@@ -81,7 +81,7 @@ export function AgendaSimulateModal({ open, formData, onClose }: AgendaSimulateM
   return (
     <>
       <div className="flex flex-col gap-3 p-4 border rounded-xl bg-card">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">Simulate this event</p>
             <p className="text-xs text-muted-foreground">

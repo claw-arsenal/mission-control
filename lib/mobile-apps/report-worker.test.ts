@@ -1,25 +1,28 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/local-db", () => ({ getSql: vi.fn() }));
-// Keep the real report-jobs (reap is pure SQL) — only sync/rollups are injected.
+// Keep the real report-jobs (reap is pure SQL) â€” only sync/rollups are injected.
 
 import {
   acquireWorkerLock,
   claimQueuedJobs,
   finishJob,
   processQueuedJobs,
+  runReportSyncJob,
+  runReportWorkerTick,
   type WorkerDeps,
 } from "@/lib/mobile-apps/report-worker";
 
 /** Router fake that returns rows by query shape and records calls + values. */
 function routerSql(opts: { locked?: boolean; claimed?: unknown[] } = {}) {
   const calls: Array<{ q: string; values: unknown[] }> = [];
+  const queued = [...(opts.claimed ?? [])];
   const fn = ((strings: TemplateStringsArray, ...values: unknown[]) => {
     const q = strings.join(" ? ");
     calls.push({ q, values });
     if (/pg_try_advisory_lock/i.test(q)) return Promise.resolve([{ locked: opts.locked ?? true }]);
-    if (/update mobile_app_report_sync_jobs/i.test(q) && /status\s*=\s*'running'/i.test(q))
-      return Promise.resolve(opts.claimed ?? []);
+    if (/update mobile_app_report_sync_jobs/i.test(q) && /set status\s*=\s*'running'/i.test(q))
+      return Promise.resolve(queued.splice(0, Number(values[0] ?? 10)));
     return Promise.resolve([]);
   }) as unknown as ReturnType<typeof import("@/lib/local-db").getSql>;
   return { fn, calls, find: (re: RegExp) => calls.filter((c) => re.test(c.q)) };
@@ -28,6 +31,20 @@ function routerSql(opts: { locked?: boolean; claimed?: unknown[] } = {}) {
 afterEach(() => vi.clearAllMocks());
 
 describe("worker advisory lock", () => {
+  it("acquires and releases on the same reserved connection, including skipped ticks", async () => {
+    for (const locked of [true, false]) {
+      const { fn: pool, calls: poolCalls } = routerSql();
+      const { fn: connection, calls: lockCalls } = routerSql({ locked });
+      const release = vi.fn();
+      Object.assign(connection, { release });
+      pool.reserve = vi.fn(async () => connection) as never;
+      const result = await runReportWorkerTick(pool);
+      expect(result.skipped).toBe(!locked);
+      expect(poolCalls.some(c => /pg_.*advisory/.test(c.q))).toBe(false);
+      expect(lockCalls.filter(c => /pg_.*advisory/.test(c.q))).toHaveLength(locked ? 2 : 1);
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
   it("acquireWorkerLock returns true when the lock is granted", async () => {
     const { fn } = routerSql({ locked: true });
     expect(await acquireWorkerLock(fn as never)).toBe(true);
@@ -35,6 +52,66 @@ describe("worker advisory lock", () => {
   it("acquireWorkerLock returns false when another worker holds it", async () => {
     const { fn } = routerSql({ locked: false });
     expect(await acquireWorkerLock(fn as never)).toBe(false);
+  });
+});
+
+describe("report job lifecycle regressions", () => {
+  const job = { id: "j1", mode: "incremental", store: null, mobileAppId: "A1", listingId: null } as const;
+  const result = (store: string, status: string, reportsStatus = "success") => ({
+    listingId: store === "google" ? "L1" : "L2", store, status, reportsStatus,
+    reportWarnings: [], fetched: 1, inserted: 1,
+  });
+  const dependencies = (results: unknown[]): WorkerDeps => ({
+    syncApp: vi.fn(async () => results) as never,
+    refreshReportRollups: vi.fn(async () => {}),
+    updateFreshness: vi.fn(async () => {}),
+  });
+
+  it("finishes the job before checking freshness and notifying readers", async () => {
+    const { fn, calls } = routerSql({ claimed: [job] });
+    const deps = dependencies([result("google", "success")]);
+    let terminalAtFreshness = false;
+    deps.updateFreshness = async () => {
+      terminalAtFreshness = calls.some(c => /finished_at/.test(c.q) && c.values[0] === "success");
+      expect(calls.some(c => /pg_notify/.test(c.q))).toBe(false);
+    };
+    await processQueuedJobs(fn, deps);
+    expect(terminalAtFreshness).toBe(true);
+  });
+
+  it("classifies failed reports as failed even when reviews succeed", async () => {
+    const { fn } = routerSql();
+    const outcome = await runReportSyncJob(fn, job, dependencies([result("google", "success", "failed")]));
+    expect(outcome.status).toBe("failed");
+  });
+
+  it("classifies one failed listing in a two-store app as partial", async () => {
+    const { fn } = routerSql();
+    const outcome = await runReportSyncJob(fn, job, dependencies([result("google", "success"), result("apple", "failed")]));
+    expect(outcome.status).toBe("partial");
+  });
+
+  it("preserves partial report outcomes and skips empty targets", async () => {
+    const { fn } = routerSql();
+    expect((await runReportSyncJob(fn, job, dependencies([result("google", "success", "partial")]))).status).toBe("partial");
+    expect((await runReportSyncJob(fn, job, dependencies([]))).status).toBe("skipped");
+  });
+
+  it("does not mark waiting jobs running before the preceding job completes", async () => {
+    const { fn, calls } = routerSql({ claimed: [job, { ...job, id: "j2" }] });
+    const deps = dependencies([result("google", "success")]);
+    await processQueuedJobs(fn, deps);
+    const claims = calls.filter(c => /set status\s*=\s*'running'/.test(c.q));
+    expect(claims.every(c => c.values[0] === 1)).toBe(true);
+    expect(vi.mocked(deps.syncApp)).toHaveBeenCalledTimes(2);
+    expect(calls.indexOf(claims[1])).toBeGreaterThan(calls.findIndex(c => c.values.includes("success")));
+  });
+
+  it("passes the listing target and bounds heavy listing concurrency", async () => {
+    const { fn } = routerSql();
+    const deps = dependencies([result("google", "success")]);
+    await runReportSyncJob(fn, { ...job, listingId: "L1" }, deps);
+    expect(deps.syncApp).toHaveBeenCalledWith("A1", expect.objectContaining({ listingId: "L1", listingConcurrency: 1 }));
   });
 });
 
@@ -74,7 +151,7 @@ describe("processQueuedJobs orchestration", () => {
     const result = await processQueuedJobs(fn as never, deps);
 
     expect(result.processed).toBe(1);
-    // Heavy flags are ON in the worker (the whole point — this is the only caller allowed to).
+    // Heavy flags are ON in the worker (the whole point â€” this is the only caller allowed to).
     expect(syncApp).toHaveBeenCalledTimes(1);
     const opts = (syncApp.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
     expect(opts).toMatchObject({ force: true, syncReports: true, syncAppleStorefronts: true });

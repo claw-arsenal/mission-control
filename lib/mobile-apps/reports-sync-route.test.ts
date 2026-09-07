@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth/session", () => ({ getSession: vi.fn() }));
 vi.mock("@/lib/modules/state", () => ({ isModuleEnabled: vi.fn() }));
@@ -6,6 +6,7 @@ vi.mock("@/lib/mobile-apps/ensure-schema", () => ({ ensureMobileAppsSchema: vi.f
 vi.mock("@/lib/local-db", () => ({
   getSql: vi.fn(() => (strings: TemplateStringsArray) => {
     const q = strings.join(" ");
+    if (q.includes("from mobile_app_listings")) return Promise.resolve([]);
     if (q.includes("from workspaces")) return Promise.resolve([{ id: "w1" }]);
     if (q.includes("from mobile_apps")) return Promise.resolve([{ id: "app1" }]); // app is owned
     return Promise.resolve([]);
@@ -35,6 +36,17 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("POST /api/mobile-apps/reports/sync", () => {
+  it("rejects a listing outside the workspace without queuing a global job", async () => {
+    const res = await POST(req({ listingId: APP }));
+    expect(res.status).toBe(404);
+    expect(enqueueReportSyncJob).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed JSON rather than treating it as a global sync request", async () => {
+    const res = await POST(new Request("http://localhost/api/mobile-apps/reports/sync", { method: "POST", body: "{" }));
+    expect(res.status).toBe(422);
+    expect(enqueueReportSyncJob).not.toHaveBeenCalled();
+  });
   it("queues a job and returns 202 + jobId + poll url", async () => {
     vi.mocked(enqueueReportSyncJob).mockResolvedValue({
       job: { id: "job-1", status: "queued", mode: "incremental", store: "google", mobileAppId: APP, listingId: null },
@@ -68,7 +80,7 @@ describe("POST /api/mobile-apps/reports/sync", () => {
     expect(enqueueReportSyncJob).not.toHaveBeenCalled();
   });
 
-  it("validates the body (bad store → 422, no enqueue)", async () => {
+  it("validates the body (bad store â†’ 422, no enqueue)", async () => {
     const res = await POST(req({ appId: APP, store: "nintendo" }));
     expect(res.status).toBe(422);
     expect(enqueueReportSyncJob).not.toHaveBeenCalled();

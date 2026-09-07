@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getDataAdapter } from "@/lib/db";
+import { useNow } from "@/hooks/use-now";
 import type {
   ColumnRecord,
   CreateTicketPayload,
@@ -99,6 +100,7 @@ const cloneBoard = (board: BoardState): BoardState => ({
       id,
       {
         ...ticket,
+        dueDate: ticket.dueDate?.slice(0, 10) ?? null,
         tags: [...ticket.tags],
         labelIds: [...(ticket.labelIds ?? [])],
         assigneeIds: [...ticket.assigneeIds],
@@ -208,7 +210,7 @@ function hydrateBoards(
         description: t.description ?? "",
         statusId: t.column_id,
         priority: isTicketPriority(t.priority) ? t.priority : "medium",
-        dueDate: t.due_date,
+        dueDate: t.due_date?.slice(0, 10) ?? null,
         tags: t.tags ?? [],
         labelIds: t.label_ids ?? [],
         assigneeIds: t.assignee_ids ?? [],
@@ -381,7 +383,7 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
   });
 
   const [view, setView] = useState<ViewMode>("kanban");
-  const [sort, setSort] = useState<SortMode>("newest");
+  const [sort, setSort] = useState<SortMode>("manual");
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   // Assignee filter: empty Set = no filter (show all). Sentinel "__unassigned__"
@@ -433,6 +435,7 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
 
   const modalTriggerRef = useRef<HTMLElement | null>(null);
   const activeBoardRef = useRef<BoardState>(createEmptyBoard());
+  const ticketMoveVersions = useRef(new Map<string, number>());
 
   const fallbackBoard = useMemo<BoardEntry>(
     () => ({
@@ -544,9 +547,10 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
 
   const ticketsList = useMemo(() => Object.values(board.tickets), [board.tickets]);
 
-  // Compute date-bucket boundaries once per render so filter is consistent.
+  const now = useNow(60_000);
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const dueBuckets = useMemo(() => {
-    const now = new Date();
+    const now = new Date(`${todayKey}T00:00:00`);
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const day = now.getDay(); // 0=Sun
     const daysUntilEndOfWeek = day === 0 ? 0 : 7 - day;
@@ -554,7 +558,7 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
     endOfWeek.setDate(endOfWeek.getDate() + daysUntilEndOfWeek);
     const endOfWeekStr = `${endOfWeek.getFullYear()}-${String(endOfWeek.getMonth() + 1).padStart(2, "0")}-${String(endOfWeek.getDate()).padStart(2, "0")}`;
     return { todayStr, endOfWeekStr };
-  }, []);
+  }, [todayKey]);
 
   const filteredTicketIds = useMemo(() => {
     const hasSearch = Boolean(searchQuery);
@@ -634,9 +638,11 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
   const clearLabelFilter = useCallback(() => setLabelFilter(new Set<string>()), []);
 
   const sortedFilteredTickets = useMemo(() => {
+    const manualOrder = new Map(board.columnOrder.flatMap((id) => board.ticketIdsByColumn[id] ?? []).map((id, index) => [id, index]));
     return ticketsList
       .filter((ticket) => filteredTicketIds.has(ticket.id))
       .sort((a, b) => {
+        if (sort === "manual") return (manualOrder.get(a.id) ?? 0) - (manualOrder.get(b.id) ?? 0);
         if (sort === "title") return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
         if (sort === "dueDate") {
           const aDue = a.dueDate ? new Date(`${a.dueDate}T00:00:00`).valueOf() : Number.MAX_SAFE_INTEGER;
@@ -646,17 +652,22 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
         if (sort === "oldest") return a.createdAt - b.createdAt;
         return b.createdAt - a.createdAt;
       });
-  }, [filteredTicketIds, sort, ticketsList]);
+  }, [board.columnOrder, board.ticketIdsByColumn, filteredTicketIds, sort, ticketsList]);
 
   const visibleTicketIdsByColumn = useMemo(() => {
     const result: Record<string, string[]> = {};
+    if (sort !== "manual") {
+      for (const columnId of board.columnOrder) result[columnId] = [];
+      for (const ticket of sortedFilteredTickets) result[ticket.statusId]?.push(ticket.id);
+      return result;
+    }
     for (const columnId of board.columnOrder) {
       result[columnId] = (board.ticketIdsByColumn[columnId] ?? []).filter((id) =>
         filteredTicketIds.has(id),
       );
     }
     return result;
-  }, [board.columnOrder, board.ticketIdsByColumn, filteredTicketIds]);
+  }, [board.columnOrder, board.ticketIdsByColumn, filteredTicketIds, sort, sortedFilteredTickets]);
 
   const createDirty = useMemo(
     () =>
@@ -1151,7 +1162,8 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
       return { ...prev, [ticketId]: next };
     });
     setSubtaskDraftsByChecklist((prev) => {
-      const { [checklistName]: _removed, ...rest } = prev;
+      const rest = { ...prev };
+      delete rest[checklistName];
       return rest;
     });
 
@@ -2327,7 +2339,10 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
       return;
     }
 
-    const previousBoard = cloneBoard(currentBoard);
+    const previousIndex = currentBoard.ticketIdsByColumn[fromColumnId].indexOf(ticketId);
+    if (previousIndex < 0) return;
+    const moveVersion = (ticketMoveVersions.current.get(ticketId) ?? 0) + 1;
+    ticketMoveVersions.current.set(ticketId, moveVersion);
     const nextTicketIdsByColumn = { ...currentBoard.ticketIdsByColumn };
     nextTicketIdsByColumn[fromColumnId] = nextTicketIdsByColumn[fromColumnId].filter(
       (id) => id !== ticketId,
@@ -2348,6 +2363,7 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
       ticketIdsByColumn: nextTicketIdsByColumn,
     };
 
+    activeBoardRef.current = nextBoard;
     updateActiveBoard(() => nextBoard);
 
     if (!persist) return;
@@ -2382,7 +2398,17 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
           "success",
         );
       } catch (error) {
-        updateActiveBoard(() => previousBoard);
+        // Roll back only this move; other ticket edits may have succeeded meanwhile.
+        if (ticketMoveVersions.current.get(ticketId) === moveVersion) {
+          updateActiveBoard((latest) => {
+            const current = latest.tickets[ticketId];
+            if (!current || !latest.columns[fromColumnId]) return latest;
+            const ids = Object.fromEntries(Object.entries(latest.ticketIdsByColumn)
+              .map(([id, tickets]) => [id, tickets.filter((id) => id !== ticketId)]));
+            ids[fromColumnId].splice(Math.min(previousIndex, ids[fromColumnId].length), 0, ticketId);
+            return { ...latest, tickets: { ...latest.tickets, [ticketId]: { ...current, statusId: fromColumnId } }, ticketIdsByColumn: ids };
+          });
+        }
         const message = error instanceof Error ? error.message : "Failed to move ticket.";
         toast.error(message);
       }

@@ -3,6 +3,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@layer base {
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+}
+
 :root {
   --radius: 0.65rem;
   /* Soft purple-tinted white background */
@@ -197,6 +204,15 @@ a {
 
 .agenda-running {
   animation: agenda-running-glow 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .agenda-needs-retry {

@@ -42,6 +42,8 @@ export function TiptapEditor({ content, onChange, ext }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
+        link: false,
+        underline: false,
         codeBlock: { HTMLAttributes: { class: "rounded-md bg-muted/40 p-3 text-xs font-mono" } },
         heading: { levels: [1, 2, 3] },
       }),
@@ -60,9 +62,13 @@ export function TiptapEditor({ content, onChange, ext }: Props) {
     editorProps: {
       attributes: {
         class: "prose prose-sm max-w-none dark:prose-invert focus:outline-none p-6 min-h-full",
+        role: "textbox",
+        "aria-label": "Document content",
+        "aria-multiline": "true",
       },
     },
     immediatelyRender: false,
+    shouldRerenderOnTransaction: true,
   });
 
   // External content updates (e.g. switching docs) — only push if different
@@ -72,7 +78,7 @@ export function TiptapEditor({ content, onChange, ext }: Props) {
     if (content === lastSyncedRef.current) return;
     const next = isHtml ? content : markdownLikeToHtml(content);
     if (editor.getHTML() === next) return;
-    editor.commands.setContent(next, false);
+    editor.commands.setContent(next, { emitUpdate: false });
     lastSyncedRef.current = content;
   }, [content, editor, isHtml]);
 
@@ -87,6 +93,7 @@ export function TiptapEditor({ content, onChange, ext }: Props) {
       size="icon-sm"
       onClick={onClick}
       aria-label={label}
+      aria-pressed={active}
       title={label}
       className={cn(TOOL_BTN, active && "bg-accent text-foreground")}
     >

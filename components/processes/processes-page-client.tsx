@@ -28,7 +28,7 @@ import { ProcessSimulateModal } from "@/components/processes/process-simulate-mo
 import { useProcesses } from "@/hooks/use-processes";
 
 export function ProcessesPageClient() {
-  const { processes, agents, skills, loading, createProcess, updateProcess, deleteProcess, duplicateProcess, getProcessDetail } = useProcesses();
+  const { processes, agents, skills, loading, error, loadProcesses, createProcess, updateProcess, deleteProcess, duplicateProcess, getProcessDetail } = useProcesses();
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingProcessId, setEditingProcessId] = useState<string | null>(null);
   const [editingInitialData, setEditingInitialData] = useState<Parameters<typeof createProcess>[0] | undefined>(undefined);
@@ -164,6 +164,10 @@ export function ProcessesPageClient() {
         </Button>
       </div>
 
+      {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+        <p>{error}</p>
+        <Button size="sm" variant="outline" disabled={loading} onClick={() => void loadProcesses()}>Try again</Button>
+      </div>}
       {/* Table */}
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

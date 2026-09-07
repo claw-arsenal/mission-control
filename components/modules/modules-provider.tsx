@@ -19,6 +19,10 @@ export type ModuleSummary = {
   navUrl: string | null;
   navTitle: string | null;
   enabled: boolean;
+  active: boolean;
+  available: boolean;
+  reason: string | null;
+  skill: { key: string; capability: string } | null;
   enabledAt: string | null;
   disabledAt: string | null;
   enabledByName: string | null;
@@ -45,7 +49,7 @@ export function ModulesProvider({ children }: { children: ReactNode }) {
     modules: [],
     // Optimistic default: assume everything is enabled until the GET resolves
     // (matches the seed behavior on first boot). Prevents UI flash during load.
-    enabledIds: new Set(["kanban", "agenda", "processes", "documents", "system"]),
+    enabledIds: new Set(["kanban", "agenda", "processes", "system"]),
   });
 
   // We re-fetch when the window regains focus so a toggle in another tab
@@ -63,6 +67,8 @@ export function ModulesProvider({ children }: { children: ReactNode }) {
       const modules = (json.modules || []) as ModuleSummary[];
       const enabledIds = new Set<string>((json.enabledIds || []) as string[]);
       setState({ ready: true, modules, enabledIds });
+    } catch {
+      // Keep the last successful snapshot during transient connection failures.
     } finally {
       fetchingRef.current = false;
     }
@@ -75,7 +81,8 @@ export function ModulesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onFocus = () => void load();
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    const poll = setInterval(() => { if (document.visibilityState === "visible") void load(); }, 15_000);
+    return () => { window.removeEventListener("focus", onFocus); clearInterval(poll); };
   }, [load]);
 
   const value = useMemo<Ctx>(

@@ -619,7 +619,6 @@ export function FileManagerClient(): React.JSX.Element {
   // Zip upload modal
   const [zipModalOpen, setZipModalOpen] = useState(false);
   const [pendingZipFiles, setPendingZipFiles] = useState<globalThis.File[]>([]);
-  const [pendingNonZipFiles, setPendingNonZipFiles] = useState<globalThis.File[]>([]);
   const [zipExtracting, setZipExtracting] = useState(false);
 
   // Conflict resolution dialog
@@ -689,7 +688,6 @@ export function FileManagerClient(): React.JSX.Element {
     setGlobalResults(null);
     setGlobalSearch(false);
     fetchDir(p);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchDir, navHistoryIdx]);
 
   const goBack = useCallback(() => {
@@ -1116,7 +1114,6 @@ export function FileManagerClient(): React.JSX.Element {
     // Show modal for zips
     if (zips.length > 0) {
       setPendingZipFiles(zips);
-      setPendingNonZipFiles(nonZips);
       setZipModalOpen(true);
     }
   }, [uploadFiles]);

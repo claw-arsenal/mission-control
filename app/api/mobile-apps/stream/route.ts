@@ -22,6 +22,8 @@ export async function GET(request: Request): Promise<Response> {
     async start(controller) {
       let closed = false;
       let cleanupStarted = false;
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      const pending = new Set<string>();
 
       const cleanup = () => {
         if (cleanupStarted) return;
@@ -29,6 +31,7 @@ export async function GET(request: Request): Promise<Response> {
         if (closed) return;
         closed = true;
         clearInterval(heartbeat);
+        if (flushTimer) clearTimeout(flushTimer);
         if (unlistenMobileApps) unlistenMobileApps().catch(() => {});
         try {
           controller.close();
@@ -52,6 +55,7 @@ export async function GET(request: Request): Promise<Response> {
       let unlistenMobileApps: (() => Promise<void>) | null = null;
 
       signal.addEventListener("abort", cleanup, { once: true });
+      if (signal.aborted) { cleanup(); return; }
 
       // Send initial connected event
       send("connected", JSON.stringify({ ts: Date.now() }));
@@ -59,9 +63,17 @@ export async function GET(request: Request): Promise<Response> {
       // Listen for mobile app sync changes
       try {
         const meta = await sql.listen("mobile_apps_change", (payload: string) => {
-          send("change", String(payload || "{}"));
+          if (closed) return;
+          pending.add(String(payload || "{}"));
+          // A bulk import commits many rows. Bound browser refreshes while retaining app scope.
+          if (!flushTimer) flushTimer = setTimeout(() => {
+            flushTimer = null;
+            for (const payload of pending) send("change", payload);
+            pending.clear();
+          }, 500);
         });
         unlistenMobileApps = () => meta.unlisten();
+        if (closed) await meta.unlisten();
       } catch {
         /* graceful degradation */
       }

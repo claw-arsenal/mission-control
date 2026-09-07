@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     if (!(await isModuleEnabled("mobile-apps")))
       return fail("Mobile Applications module is disabled. Enable it in Settings.", 503);
 
-    const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
+    const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return fail("Invalid report sync request.", 422);
 
     const sql = getSql();
@@ -46,6 +46,21 @@ export async function POST(request: Request) {
         select id from mobile_apps where id = ${parsed.data.appId}::uuid and workspace_id = ${wsRows[0]?.id ?? null}::uuid limit 1
       `) as unknown as Array<{ id: string }>;
       if (!owned[0]) return fail("App not found", 404);
+    }
+
+    if (parsed.data.listingId) {
+      const listings = (await sql`
+        select l.mobile_app_id::text as "appId", l.store
+        from mobile_app_listings l
+        join mobile_apps a on a.id = l.mobile_app_id
+        where l.id = ${parsed.data.listingId}::uuid
+          and a.workspace_id = (select id from workspaces order by created_at asc limit 1)
+          and (${parsed.data.appId ?? null}::uuid is null or a.id = ${parsed.data.appId ?? null}::uuid)
+          and (${parsed.data.store ?? null}::text is null or l.store = ${parsed.data.store ?? null})
+      `) as unknown as Array<{ appId: string; store: "google" | "apple" }>;
+      if (!listings[0]) return fail("Listing not found", 404);
+      parsed.data.appId = listings[0].appId;
+      parsed.data.store = listings[0].store;
     }
 
     const { job, reused } = await enqueueReportSyncJob(sql, {

@@ -86,7 +86,7 @@ export function ListView({
                 onClick={() => onTicketClick(ticket.id)}
               >
                 <TableCell>
-                  <span className="text-sm font-medium line-clamp-1">{ticket.title}</span>
+                  <button type="button" className="rounded text-left text-sm font-medium line-clamp-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={(event) => { event.stopPropagation(); onTicketClick(ticket.id); }}>{ticket.title}</button>
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">

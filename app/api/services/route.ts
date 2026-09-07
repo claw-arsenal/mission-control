@@ -13,7 +13,7 @@ const ok = (data: Json = {}): NextResponse => NextResponse.json({ ok: true, ...d
 const fail = (message: string, status = 400): NextResponse =>
   NextResponse.json({ ok: false, error: message }, { status });
 
-const PROJECT_ROOT = resolve(process.cwd());
+const PROJECT_ROOT = resolve(/*turbopackIgnore: true*/ process.cwd());
 const MC_SERVICES_SCRIPT = resolve(PROJECT_ROOT, "scripts/mc-services.sh");
 const LOG_DIR = resolve(PROJECT_ROOT, ".runtime/logs");
 const PID_DIR = resolve(PROJECT_ROOT, ".runtime/pids");

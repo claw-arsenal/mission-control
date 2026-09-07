@@ -22,6 +22,7 @@
  */
 import { existsSync } from "node:fs";
 import { config as loadDotenv } from "dotenv";
+import { isUuid } from "@/lib/mobile-apps/ids";
 
 // Load env BEFORE importing anything that reads process.env at module-eval time
 // (lib/local-db captures DATABASE_URL on first import). Already-set values win.
@@ -47,7 +48,11 @@ function parseArgs(argv: string[]): Args {
   const out: Args = { drainOnly: false, watch: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    const next = () => argv[++i];
+    const next = () => {
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) throw new Error(`Missing value for ${a}`);
+      return value;
+    };
     if (a === "--mode") out.mode = next() as Args["mode"];
     else if (a === "--app-id") out.appId = next();
     else if (a === "--listing-id") out.listingId = next();
@@ -56,7 +61,13 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--interval-ms") out.intervalMs = Number(next());
     else if (a === "--drain-only") out.drainOnly = true;
     else if (a === "--watch") out.watch = true;
+    else throw new Error(`Unknown argument: ${a}`);
   }
+  if (out.mode && !["incremental", "backfill"].includes(out.mode)) throw new Error("Mode must be incremental or backfill.");
+  if (out.store && !["google", "apple"].includes(out.store)) throw new Error("Store must be google or apple.");
+  if ([out.appId, out.listingId].some(id => id !== undefined && !isUuid(id))) throw new Error("App and listing IDs must be UUIDs.");
+  if (out.intervalMs !== undefined && (!Number.isFinite(out.intervalMs) || out.intervalMs <= 0)) throw new Error("Interval must be a positive number of milliseconds.");
+  if (out.watch && out.drainOnly) throw new Error("Choose either --watch or --drain-only.");
   return out;
 }
 
@@ -70,39 +81,27 @@ type Deps = Awaited<ReturnType<typeof loadDeps>>;
 async function loadDeps() {
   const { getSql, closeSql } = await import("@/lib/local-db");
   const { ensureMobileAppsSchema } = await import("@/lib/mobile-apps/ensure-schema");
-  const { acquireWorkerLock, releaseWorkerLock, processQueuedJobs } = await import("@/lib/mobile-apps/report-worker");
-  const { enqueueReportSyncJob } = await import("@/lib/mobile-apps/report-jobs");
-  return { getSql, closeSql, ensureMobileAppsSchema, acquireWorkerLock, releaseWorkerLock, processQueuedJobs, enqueueReportSyncJob };
+  const { runReportWorkerTick } = await import("@/lib/mobile-apps/report-worker");
+  const { isModuleEnabled } = await import("@/lib/modules/state");
+  return { getSql, closeSql, ensureMobileAppsSchema, runReportWorkerTick, isModuleEnabled };
 }
 
 // One pass: grab the lock (so two workers never overlap), optionally enqueue an
 // incremental job, drain the queue, release the lock. The advisory lock is
 // session-scoped, so even an abrupt kill releases it when the connection drops.
 async function runTick(deps: Deps, args: Args, opts: { enqueue: boolean }): Promise<void> {
+  if (!(await deps.isModuleEnabled("mobile-apps"))) return;
   const sql = deps.getSql();
   await deps.ensureMobileAppsSchema(sql); // idempotent + cached; safe to call each tick
-  const locked = await deps.acquireWorkerLock(sql);
-  if (!locked) {
-    log("another worker holds the advisory lock; skipping this tick", { skipped: true });
-    return;
-  }
-  try {
-    if (opts.enqueue) {
-      const { job, reused } = await deps.enqueueReportSyncJob(sql, {
-        appId: args.appId ?? null,
-        listingId: args.listingId ?? null,
-        store: args.store ?? null,
-        mode: args.mode ?? "incremental",
-        reason: args.reason ?? (args.watch ? "cron" : "manual"),
-        requestedBy: "worker",
-      });
-      log("enqueued job", { jobId: job.id, mode: job.mode, reused });
-    }
-    const result = await deps.processQueuedJobs(sql);
-    log("drained queued jobs", result);
-  } finally {
-    await deps.releaseWorkerLock(sql);
-  }
+  const result = await deps.runReportWorkerTick(sql, opts.enqueue ? {
+    appId: args.appId ?? null,
+    listingId: args.listingId ?? null,
+    store: args.store ?? null,
+    mode: args.mode ?? "incremental",
+    reason: args.reason ?? (args.watch ? "cron" : "manual"),
+    requestedBy: "worker",
+  } : undefined);
+  if (result.processed || opts.enqueue || result.skipped) log("report worker tick", result);
 }
 
 async function main() {
@@ -113,17 +112,18 @@ async function main() {
     const intervalMs = Math.max(MIN_INTERVAL_MS, args.intervalMs || Number(process.env.MOBILE_REPORTS_WORKER_INTERVAL_MS) || DEFAULT_INTERVAL_MS);
     log("watch mode started", { intervalMs });
     let stop = false;
+    let nextScheduledAt = 0;
     for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { stop = true; });
-    // Resident loop: each tick enqueues an incremental pass (so Google's newly
-    // published reports are pulled even for apps nobody is viewing) and drains.
     while (!stop) {
       try {
-        await runTick(deps, args, { enqueue: true });
+        const enqueue = Date.now() >= nextScheduledAt;
+        await runTick(deps, args, { enqueue });
+        if (enqueue) nextScheduledAt = Date.now() + intervalMs;
       } catch (error) {
         log("tick failed (continuing)", { error: error instanceof Error ? error.message : String(error) });
       }
-      // Interruptible sleep so SIGTERM stops promptly instead of after a full interval.
-      for (let waited = 0; waited < intervalMs && !stop; waited += 1000) await sleep(Math.min(1000, intervalMs - waited));
+      // Manual jobs are picked up promptly; scheduled refresh cadence is separate.
+      for (let waited = 0; waited < 5000 && !stop; waited += 1000) await sleep(1000);
     }
     log("watch mode stopping");
     await deps.closeSql();

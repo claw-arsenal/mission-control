@@ -16,6 +16,14 @@ type Sql = ReturnType<typeof getSql>;
 
 export type ReportFreshnessState = "fresh" | "refreshing" | "stale" | "failed" | "unknown" | "not_configured";
 
+const STATUS_ORDER: ReportFreshnessState[] = ["failed", "stale", "refreshing", "unknown", "not_configured", "fresh"];
+
+export function summarizeReportFreshness(states: ReportFreshnessState[], expectedListings = states.length) {
+  const complete = states.length < expectedListings ? [...states, "unknown"] : states;
+  const status = STATUS_ORDER.find(state => complete.includes(state)) ?? "not_configured";
+  return { status, reportsFresh: expectedListings === 0 || status === "fresh" };
+}
+
 export type FreshnessResult = {
   status: ReportFreshnessState;
   needsWorker: boolean;
@@ -79,7 +87,7 @@ async function writeFreshness(
             ${result.latestOfficialGeneration}, ${result.latestProcessedGeneration},
             now(), ${processedAtNow ? new Date().toISOString() : null}::timestamptz,
             ${result.activeJobId}::uuid, ${errorMessage},
-            ${JSON.stringify(result.warnings)}::jsonb, now())
+            ${JSON.stringify(result.warnings)}::text::jsonb, now())
     on conflict (listing_id) do update set
       status = excluded.status,
       latest_official_yyyy_mm = excluded.latest_official_yyyy_mm,
@@ -92,7 +100,7 @@ async function writeFreshness(
       error_message = excluded.error_message,
       warnings = excluded.warnings,
       updated_at = now()
-  `.catch(() => null);
+  `;
 }
 
 /**
@@ -151,11 +159,11 @@ export async function checkOfficialReportFreshness(
   const processedRows = (await sql`
     select object_path, generation, yyyy_mm
     from mobile_app_report_files
-    where listing_id = ${listingId}::uuid and status = 'parsed'
+    where listing_id = ${listingId}::uuid and status in ('parsed', 'empty')
   `) as unknown as Array<{ object_path: string; generation: string | null; yyyy_mm: string | null }>;
   const processedSet = new Set(processedRows.map((r) => `${r.object_path}@${r.generation ?? ""}`));
 
-  const unprocessed = officialObjects.filter((o) => !processedSet.has(`${o.path}@${o.generation ?? ""}`));
+  const unprocessed = officialObjects.filter((o) => o.generation == null || !processedSet.has(`${o.path}@${o.generation}`));
 
   // Summary fields (loose; the real verdict uses the full-set comparison above).
   const newestOfficial = [...officialObjects].sort((a, b) => b.yyyyMM.localeCompare(a.yyyyMM))[0] ?? null;
@@ -172,12 +180,13 @@ export async function checkOfficialReportFreshness(
   // they count too; otherwise we'd report 'stale' and enqueue duplicate work while
   // the global pass is already processing this listing.
   const recentRows = (await sql`
-    select id::text, status from mobile_app_report_sync_jobs
-    where (listing_id = ${listingId}::uuid
-       or mobile_app_id = ${listing.mobileAppId}::uuid
-       or (listing_id is null and mobile_app_id is null))
-    order by created_at desc limit 1
-  `) as unknown as Array<{ id: string; status: string }>;
+    select id::text, status, stats from mobile_app_report_sync_jobs
+    where (store is null or store = 'google')
+      and (listing_id = ${listingId}::uuid
+        or (listing_id is null and mobile_app_id = ${listing.mobileAppId}::uuid)
+        or (listing_id is null and mobile_app_id is null))
+    order by (status in ('queued', 'running')) desc, created_at desc limit 1
+  `) as unknown as Array<{ id: string; status: string; stats?: { rollupFailedListings?: string[] } }>;
   const recent = recentRows[0];
 
   let status: ReportFreshnessState;
@@ -187,10 +196,14 @@ export async function checkOfficialReportFreshness(
   if (recent && (recent.status === "queued" || recent.status === "running")) {
     status = "refreshing";
     activeJobId = recent.id;
+  } else if (recent?.stats?.rollupFailedListings?.includes(listingId)) {
+    status = "failed";
+    needsWorker = true;
+    warnings.push("Report files were processed, but chart rollups failed. Retry report sync.");
   } else if (unprocessed.length > 0) {
     needsWorker = true;
-    status = recent && recent.status === "failed" ? "failed" : "stale";
-  } else if (officialObjects.length === 0 && processedRows.length === 0) {
+    status = recent && (recent.status === "failed" || recent.status === "partial") ? "failed" : "stale";
+  } else if (officialObjects.length === 0) {
     status = "unknown";
   } else {
     // No unprocessed official objects → the latest published report is processed.

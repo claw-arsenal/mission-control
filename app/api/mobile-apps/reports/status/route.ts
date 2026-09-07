@@ -3,12 +3,11 @@ import { getSql } from "@/lib/local-db";
 import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
 import { ensureMobileAppsSchema } from "@/lib/mobile-apps/ensure-schema";
+import { isUuid } from "@/lib/mobile-apps/ids";
 
 export const dynamic = "force-dynamic";
 
 const fail = (message: string, status = 400) => NextResponse.json({ ok: false, error: message }, { status });
-
-const uuidOrNull = (v: string | null) => (v && /^[0-9a-fA-F-]{36}$/.test(v) ? v : null);
 
 /**
  * Poll endpoint for UI and future skills. Returns recent report-sync jobs and the
@@ -22,9 +21,10 @@ export async function GET(request: Request) {
       return fail("Mobile Applications module is disabled. Enable it in Settings.", 503);
 
     const { searchParams } = new URL(request.url);
-    const jobId = uuidOrNull(searchParams.get("jobId"));
-    const appId = uuidOrNull(searchParams.get("appId"));
-    const listingId = uuidOrNull(searchParams.get("listingId"));
+    const jobId = searchParams.get("jobId");
+    const appId = searchParams.get("appId");
+    const listingId = searchParams.get("listingId");
+    if ([jobId, appId, listingId].some(id => id !== null && !isUuid(id))) return fail("Invalid report status identifier.", 422);
 
     const sql = getSql();
     await ensureMobileAppsSchema(sql);

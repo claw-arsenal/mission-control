@@ -1,0 +1,211 @@
+[
+  {
+    "title": "Session platform mix",
+    "description": "Sessions grouped by the device information reported by the client.",
+    "timerange": "monthly",
+    "query": "SELECT\n  CASE\n    WHEN clientDevice LIKE '%iPhone%'  THEN 'iPhone'\n    WHEN clientDevice LIKE '%iPad%'   THEN 'iPad'\n    WHEN clientDevice LIKE 'tablet%'   THEN 'Tablet'\n    WHEN clientDevice LIKE 'desktop%'  THEN 'Desktop'\n    WHEN clientDevice LIKE 'mobile%'   THEN 'Mobile (non-iOS)'\n    ELSE 'Other'\n  END AS `Platform`,\n  COUNT(*) AS `Sessions`\nFROM altinstar.PlayerSession\nWHERE `start` >= :since AND `start` < :until\nGROUP BY `Platform`\nORDER BY `Sessions` DESC",
+    "chart": "donut",
+    "xColumn": "Platform",
+    "yColumns": [
+      "Sessions"
+    ],
+    "replaces": "Platform Mix",
+    "category": "Audience",
+    "notes": "One player may generate many sessions or use more than one platform. Shares describe sessions, not unique players. Device labels are inferred from clientDevice: the mobile prefix alone does not prove Android. Unknown devices stay in Other. A platform gaining share is not automatically good or bad.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Top non-iOS mobile devices",
+    "description": "The 15 most-used non-iOS mobile device labels, ranked by sessions.",
+    "timerange": "monthly",
+    "query": "SELECT\n  SUBSTRING_INDEX(SUBSTRING_INDEX(clientDevice, ';', 4), ';', -1) AS `Device`,\n  COUNT(*) AS `Sessions`,\n  COUNT(DISTINCT player_id) AS `Players`\nFROM altinstar.PlayerSession\nWHERE `start` >= :since AND `start` < :until\n  AND clientDevice LIKE 'mobile%'\n  AND clientDevice NOT LIKE '%iPhone%'\n  AND clientDevice NOT LIKE '%iPad%'\nGROUP BY `Device`\nHAVING `Sessions` > 50\nORDER BY `Sessions` DESC\nLIMIT 15",
+    "chart": "bar",
+    "xColumn": "Device",
+    "yColumns": [
+      "Sessions",
+      "Players"
+    ],
+    "replaces": "Top Android Devices",
+    "category": "Audience",
+    "notes": "Device labels are parsed from the fourth semicolon-delimited clientDevice field. The mobile prefix and exclusions are a classification heuristic, not verified operating-system detection. Only device labels with more than 50 sessions appear. Players are distinct within each device and can appear under several devices. This is a ranked subset, not the entire device population.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Active players by country",
+    "description": "Top 10 countries by distinct players who started a session during the selected range.",
+    "timerange": "monthly",
+    "query": "SELECT\n  country AS `Country`,\n  COUNT(DISTINCT player_id) AS `Active players`\nFROM altinstar.PlayerSession\nWHERE `start` >= :since AND `start` < :until\n  AND country IS NOT NULL\n  AND country <> ''\nGROUP BY country\nORDER BY `Active players` DESC\nLIMIT 10",
+    "chart": "bar",
+    "xColumn": "Country",
+    "yColumns": [
+      "Active players"
+    ],
+    "replaces": "Daily Active users by country",
+    "category": "Audience",
+    "notes": "This is a whole-range active-player count, not daily active users. A player is counted once per country but may appear in several countries. Missing or blank country values are excluded. Only the top 10 countries are shown; their sum is not a global unique-player total.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "New-player return rate",
+    "description": "Share of eligible new players who returned on calendar days 1-7 or 1-28 after signup.",
+    "timerange": "monthly",
+    "query": "WITH bounds AS (\n  SELECT LEAST(:until, COALESCE(MAX(`start`), :until)) AS cutoff\n  FROM altinstar.PlayerSession\n), cohorts AS (\n  SELECT p.id, DATE(p.joined) AS joined_day,\n         DATE_FORMAT(p.joined, :bucket) AS bucket,\n         b.cutoff,\n         CASE :bucket\n           WHEN '%Y-%m-%d %H:00' THEN STR_TO_DATE(DATE_FORMAT(p.joined, '%Y-%m-%d %H:00:00'), '%Y-%m-%d %H:%i:%s') + INTERVAL 1 HOUR\n           WHEN '%Y-%m-%d' THEN DATE(p.joined) + INTERVAL 1 DAY\n           WHEN '%x-W%v' THEN DATE(p.joined) - INTERVAL WEEKDAY(p.joined) DAY + INTERVAL 7 DAY\n           WHEN '%Y-%m' THEN DATE(p.joined) - INTERVAL (DAYOFMONTH(p.joined) - 1) DAY + INTERVAL 1 MONTH\n           WHEN '%Y' THEN MAKEDATE(YEAR(p.joined) + 1, 1)\n         END AS period_end\n  FROM altinstar.Player p CROSS JOIN bounds b\n  WHERE p.joined >= :since AND p.joined < :until\n    AND p.authType <> 'PRIVATE'\n), eligible AS (\n  SELECT * FROM cohorts\n  WHERE period_end + INTERVAL 28 DAY <= cutoff\n), flags AS (\n  SELECT c.id, c.bucket,\n         MAX(CASE WHEN ps.`start` < c.joined_day + INTERVAL 8 DAY THEN 1 ELSE 0 END) AS returned_7d,\n         MAX(CASE WHEN ps.player_id IS NOT NULL THEN 1 ELSE 0 END) AS returned_28d\n  FROM eligible c\n  LEFT JOIN altinstar.PlayerSession ps\n    ON ps.player_id = c.id\n   AND ps.`start` >= c.joined_day + INTERVAL 1 DAY\n   AND ps.`start` < c.joined_day + INTERVAL 29 DAY\n  GROUP BY c.id, c.bucket\n)\nSELECT bucket,\n       ROUND(100 * SUM(returned_7d) / NULLIF(COUNT(*), 0), 1) AS `Returned within 7 days (%)`,\n       ROUND(100 * SUM(returned_28d) / NULLIF(COUNT(*), 0), 1) AS `Returned within 28 days (%)`,\n       COUNT(*) AS `Eligible new players`,\n       SUM(returned_7d) AS `Returned within 7 days`,\n       SUM(returned_28d) AS `Returned within 28 days`\nFROM flags\nGROUP BY bucket ORDER BY bucket",
+    "chart": "line",
+    "xColumn": "bucket",
+    "yColumns": [
+      "Returned within 7 days (%)",
+      "Returned within 28 days (%)"
+    ],
+    "replaces": "New Players — Do They Come Back?",
+    "category": "Engagement",
+    "notes": "Each point groups players by signup period, not the date they returned. Day 0 is excluded. A session on any of days 1-7 counts in both rates; days 8-28 count only in the 28-day rate. This is cumulative return behavior, not exact-day D7 or D28 retention. PRIVATE accounts are excluded, matching the registration definition. Both rates use the same eligible-player denominator. Only signup periods whose entire calendar period plus 28 days has elapsed at the cutoff are included, so recent periods are intentionally absent. The cutoff is the earlier of the requested end and the latest session timestamp; it is not proof of replication completeness. The first period can be clipped by the requested start. Counts remain available in Table but only the two rates are plotted. Example: 2 of 5 players returning by day 7 is 40%; 3 of 5 by day 28 is 60%.",
+    "trendDirection": "higher",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Rooms created and ended",
+    "description": "Rooms created in each period, alongside how many have a recorded end timestamp.",
+    "timerange": "monthly",
+    "query": "SELECT DATE_FORMAT(creation, :bucket) AS bucket,\n       COUNT(*)               AS `Rooms created`,\n       SUM(`end` IS NOT NULL) AS `Rooms with an end`\nFROM altinstar.Room\nWHERE creation >= :since AND creation < :until\nGROUP BY bucket ORDER BY bucket",
+    "chart": "line",
+    "xColumn": "bucket",
+    "yColumns": [
+      "Rooms created",
+      "Rooms with an end"
+    ],
+    "replaces": "Games Started vs Finished",
+    "category": "Gameplay",
+    "notes": "Both series are grouped by room creation time. The ended count includes rooms that ended later, so historical values can change. A created room does not necessarily mean a played game. The gap includes in-progress rooms and rooms with missing end records; it cannot by itself establish abandonment.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "New registrations",
+    "description": "Player records created in each period, with the subset marked as having a referrer.",
+    "timerange": "monthly",
+    "query": "SELECT DATE_FORMAT(joined, :bucket) AS bucket,\n       COUNT(*)                                          AS `Registrations`,\n       SUM(CASE WHEN haveReferrer = 1 THEN 1 ELSE 0 END) AS `With referral`\nFROM altinstar.Player\nWHERE authType <> 'PRIVATE' AND joined >= :since AND joined < :until\nGROUP BY bucket ORDER BY bucket",
+    "chart": "bar",
+    "xColumn": "bucket",
+    "yColumns": [
+      "Registrations",
+      "With referral"
+    ],
+    "replaces": "New Registrations",
+    "category": "Acquisition",
+    "notes": "Registrations are records, not necessarily unique humans or activated players. PRIVATE accounts and NULL authType values are excluded by the existing authType filter. With referral is a subset of registrations, so do not add the two series. A referral flag is an attribution signal, not proof of causation or acquisition quality.",
+    "trendDirection": "higher",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Registration method mix",
+    "description": "All-history distribution of registration methods for non-PRIVATE player records.",
+    "timerange": "monthly",
+    "query": "SELECT CASE authType\n         WHEN 'EMAIL'    THEN 'Email'\n         WHEN 'FACEBOOK' THEN 'Facebook'\n         WHEN 'GOOGLE'   THEN 'Google'\n         WHEN 'APPLE'    THEN 'Apple'\n         WHEN 'GATEWAY'  THEN 'Gateway'\n         WHEN ''         THEN 'Guest / none'\n         ELSE authType\n       END AS `Auth method`,\n       COUNT(*) AS `Players`\nFROM altinstar.Player\nWHERE authType <> 'PRIVATE'\nGROUP BY authType ORDER BY `Players` DESC",
+    "chart": "donut",
+    "xColumn": "Auth method",
+    "yColumns": [
+      "Players"
+    ],
+    "replaces": "Auth Type Breakdown",
+    "category": "Acquisition",
+    "notes": "This query does not use the dashboard time range. It measures the historical signup method stored on Player, not current login activity or authentication success. Empty authType is Guest / none; NULL authType is excluded by the filter. Shares describe returned player records.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Referral share of registrations",
+    "description": "Percentage of non-PRIVATE registrations marked as having a referrer in each period.",
+    "timerange": "monthly",
+    "query": "SELECT DATE_FORMAT(joined, :bucket) AS bucket,\n       ROUND(100*SUM(CASE WHEN haveReferrer = 1 THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0),1) AS `Referred %`\nFROM altinstar.Player\nWHERE authType <> 'PRIVATE' AND joined >= :since AND joined < :until\nGROUP BY bucket ORDER BY bucket",
+    "chart": "line",
+    "xColumn": "bucket",
+    "yColumns": [
+      "Referred %"
+    ],
+    "replaces": "Referral-Driven Growth",
+    "category": "Acquisition",
+    "notes": "Calculation: referred registrations divided by all eligible registrations, multiplied by 100. Both counts use the same signup-time range and authType filter. Rate changes are in percentage points: 10% to 12% is +2 pp. Do not average bucket percentages to obtain a whole-range rate; use the summed numerator divided by the summed denominator.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Active players and sessions",
+    "description": "Distinct players and total sessions started in each time group.",
+    "timerange": "daily",
+    "query": "SELECT DATE_FORMAT(`start`, :bucket) AS bucket,\n       COUNT(DISTINCT player_id) AS `Active players`,\n       COUNT(*)                  AS `Sessions`\nFROM altinstar.PlayerSession\nWHERE `start` >= :since AND `start` < :until\nGROUP BY bucket ORDER BY bucket",
+    "chart": "line",
+    "xColumn": "bucket",
+    "yColumns": [
+      "Active players",
+      "Sessions"
+    ],
+    "replaces": "Daily Active Users",
+    "category": "Engagement",
+    "notes": "Active players are distinct within each group: daily groups give daily active players; monthly groups give monthly active players. Do not sum these values to obtain unique players across the full range. Sessions measure visits, not duration. Session records are not filtered by account type in this query, so its population differs from registration metrics. The saved default is daily over the last 30 days.",
+    "trendDirection": "higher",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Room variant mix",
+    "description": "Rooms created during the range, grouped by their detailed game variant.",
+    "timerange": "monthly",
+    "query": "SELECT CASE hGameType\n         WHEN 'Okey.N101.Normal'        THEN 'Okey 101'\n         WHEN 'Okey.N101.Trump'         THEN 'Okey 101 (Trump)'\n         WHEN 'Okey.Duz'                THEN 'Okey Düz'\n         WHEN 'Backgammon.Tavla'        THEN 'Backgammon'\n         WHEN 'Cardgames.Pisti'         THEN 'Pişti'\n         WHEN 'Cardgames.Poker.Turkish' THEN 'Turkish Poker'\n         ELSE COALESCE(hGameType,'Unknown')\n       END AS `Game type`, COUNT(*) AS `Rooms`\nFROM altinstar.Room\nWHERE creation >= :since AND creation < :until\nGROUP BY hGameType ORDER BY `Rooms` DESC",
+    "chart": "donut",
+    "xColumn": "Game type",
+    "yColumns": [
+      "Rooms"
+    ],
+    "replaces": "Game Variant Mix",
+    "category": "Gameplay",
+    "notes": "Counts describe created rooms, including unfinished or unplayed rooms. Labels use hGameType; unrecognized variants retain their source value and NULL is Unknown. Shares show the returned room total. Volume alone cannot establish preference, quality, or successful completion.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Rooms without a recorded end",
+    "description": "Percentage of rooms created in each period that currently have no end timestamp.",
+    "timerange": "monthly",
+    "query": "SELECT DATE_FORMAT(creation, :bucket) AS bucket,\n       ROUND(100*SUM(`end` IS NULL)/NULLIF(COUNT(*),0),1) AS `Without end %`\nFROM altinstar.Room\nWHERE creation >= :since AND creation < :until\nGROUP BY bucket ORDER BY bucket",
+    "chart": "line",
+    "xColumn": "bucket",
+    "yColumns": [
+      "Without end %"
+    ],
+    "replaces": "Abandonment Rate",
+    "category": "Gameplay",
+    "notes": "This is an unfinished-room signal, not a verified abandonment rate. It includes rooms in progress and missing end records. Historical values may fall as rooms finish. Compare elapsed periods and investigate alongside room volume; a lower value generally indicates a more complete set of end records, not necessarily a causal improvement in player experience. A true abandonment metric needs an agreed timeout or terminal-state definition.",
+    "trendDirection": "lower",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  },
+  {
+    "title": "Okey penalty reasons",
+    "description": "Penalty events recorded in the selected range, grouped by reason.",
+    "timerange": "monthly",
+    "query": "SELECT reason AS `Reason`, COUNT(*) AS `Penalties`\nFROM altinstar.OkeyEventPlayerPenalty\nWHERE `date` >= :since AND `date` < :until\nGROUP BY reason ORDER BY `Penalties` DESC",
+    "chart": "donut",
+    "xColumn": "Reason",
+    "yColumns": [
+      "Penalties"
+    ],
+    "replaces": "Okey Penalty Reasons",
+    "category": "Gameplay",
+    "notes": "Counts represent penalty events, not unique penalized players or games. A volume increase may reflect more gameplay rather than more friction. Compare against eligible gameplay volume before interpreting a rate. Reasons can suggest areas to investigate; they do not establish exploit attempts or confusing UX on their own.",
+    "trendDirection": "neutral",
+    "valueFormat": "auto",
+    "kpiAggregation": "latest"
+  }
+]

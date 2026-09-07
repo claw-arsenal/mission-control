@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileResponseHeaders } from "@/lib/files/response-headers";
 import AdmZip from "adm-zip";
 
 const ROOT = "/home/clawdbot/.openclaw";
@@ -395,7 +396,7 @@ export async function GET(
       const buf = fs.readFileSync(resolved);
       return new NextResponse(buf, {
         headers: {
-          "Content-Type": mime,
+          ...fileResponseHeaders(path.basename(resolved), mime),
           "Content-Length": String(buf.length),
           "Cache-Control": "private, max-age=60",
         },
@@ -465,7 +466,7 @@ export async function GET(
     const items: FileItem[] = [];
     for (const entry of entries) {
       const entryId = (dirId === "/" ? "" : dirId) + "/" + entry.name;
-      const item = toItem(path.join(resolved, entry.name), entryId);
+      const item = toItem(path.join(/*turbopackIgnore: true*/ resolved, entry.name), entryId);
       if (item) items.push(item);
     }
 
@@ -517,7 +518,7 @@ export async function POST(
           for (const entry of entries) {
             // Sanitise: resolve against parentPath and reject traversal
             const entryName = entry.entryName.replace(/\\/g, "/");
-            const destPath = path.resolve(parentPath, entryName);
+            const destPath = path.resolve(/*turbopackIgnore: true*/ parentPath, entryName);
             if (!destPath.startsWith(parentPath + path.sep) && destPath !== parentPath) continue;
             if (!destPath.startsWith(ROOT)) continue;
 
@@ -548,8 +549,8 @@ export async function POST(
         const conflicts: string[] = [];
         for (const file of files) {
           if (!(file instanceof globalThis.File)) continue;
-          const dest = path.join(parentPath, file.name);
-          if (fs.existsSync(dest)) conflicts.push(file.name);
+          const dest = path.join(/*turbopackIgnore: true*/ parentPath, file.name);
+          if (fs.existsSync(/*turbopackIgnore: true*/ dest)) conflicts.push(file.name);
         }
         if (conflicts.length > 0) {
           return NextResponse.json({ ok: false, conflicts, error: "Name conflict" }, { status: 409 });
@@ -564,8 +565,8 @@ export async function POST(
         if (file.size > MAX_UPLOAD_BYTES) continue;
 
         let fileName = file.name;
-        const destCheck = path.join(parentPath, fileName);
-        const destExists = fs.existsSync(destCheck);
+        const destCheck = path.join(/*turbopackIgnore: true*/ parentPath, fileName);
+        const destExists = fs.existsSync(/*turbopackIgnore: true*/ destCheck);
 
         if (destExists) {
           if (onConflict === "skip") continue;
@@ -575,7 +576,7 @@ export async function POST(
           // "replace" → overwrite in place
         }
 
-        const filePath = path.join(parentPath, fileName);
+        const filePath = path.join(/*turbopackIgnore: true*/ parentPath, fileName);
         if (!filePath.startsWith(ROOT)) continue;
 
         const buf = Buffer.from(await file.arrayBuffer());
@@ -701,8 +702,8 @@ export async function PUT(
         const src = resolveSafe(fileId);
         if (!fs.existsSync(src)) continue;
         const rawName = path.basename(src);
-        const dest = path.join(targetPath, rawName);
-        if (fs.existsSync(dest) && dest !== src) {
+        const dest = path.join(/*turbopackIgnore: true*/ targetPath, rawName);
+        if (fs.existsSync(/*turbopackIgnore: true*/ dest) && dest !== src) {
           conflicts.push(rawName);
         }
       }
@@ -725,10 +726,10 @@ export async function PUT(
         }
 
         const rawName = path.basename(src);
-        const dest = path.join(targetPath, rawName);
+        const dest = path.join(/*turbopackIgnore: true*/ targetPath, rawName);
         if (!dest.startsWith(ROOT)) continue;
 
-        const destExists = fs.existsSync(dest) && dest !== src;
+        const destExists = fs.existsSync(/*turbopackIgnore: true*/ dest) && dest !== src;
 
         // Resolve conflict
         let finalDest = dest;
@@ -736,7 +737,7 @@ export async function PUT(
           if (onConflict === "skip") continue;
           if (onConflict === "keep-both") {
             const dedupedName = dedupName(targetPath, rawName);
-            finalDest = path.join(targetPath, dedupedName);
+            finalDest = path.join(/*turbopackIgnore: true*/ targetPath, dedupedName);
           }
           // "replace" → overwrite in place (finalDest stays as dest)
         }

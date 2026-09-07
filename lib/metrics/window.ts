@@ -16,6 +16,8 @@
  * These are bound as positional `?` params via bindNamedParams in sql-guard.ts.
  */
 
+import { bindNamedParams, stripComments } from "./sql-guard";
+
 export type WindowName = "hourly" | "daily" | "weekly" | "monthly" | "yearly" | "custom";
 
 export type ResolvedWindow = {
@@ -105,7 +107,7 @@ export function isValidWindow(value: unknown): value is WindowName {
  * them. Matched as `:word` so `created_at` or `::cast` never trip it.
  */
 export function usesWindow(sql: string): boolean {
-  return /(?<![:\w]):(?:since|until|bucket)\b/i.test(sql);
+  return bindNamedParams(stripComments(sql), { since: null, until: null, bucket: null }).values.length > 0;
 }
 
 /**
@@ -120,7 +122,7 @@ export function usesWindow(sql: string): boolean {
  * names never trip it.
  */
 export function usesBucket(sql: string): boolean {
-  return /(?<![:\w]):bucket\b/i.test(sql);
+  return bindNamedParams(stripComments(sql), { bucket: null }).values.length > 0;
 }
 
 /**

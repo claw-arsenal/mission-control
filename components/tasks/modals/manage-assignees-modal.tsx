@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,7 +31,11 @@ type Props = {
   onClose: () => void;
 };
 
-export function ManageAssigneesModal({ open, boardName, assignees, onCreate, onUpdate, onDelete, onClose }: Props) {
+export function ManageAssigneesModal(props: Props) {
+  return <ManageAssigneesDialog key={String(props.open)} {...props} />;
+}
+
+function ManageAssigneesDialog({ open, boardName, assignees, onCreate, onUpdate, onDelete, onClose }: Props) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [color, setColor] = useState(SWATCHES[0]);
@@ -42,15 +46,6 @@ export function ManageAssigneesModal({ open, boardName, assignees, onCreate, onU
   const [editEmail, setEditEmail] = useState("");
   const [editColor, setEditColor] = useState(SWATCHES[0]);
 
-  useEffect(() => {
-    if (!open) {
-      setName("");
-      setEmail("");
-      setColor(SWATCHES[0]);
-      setError("");
-      setEditingId(null);
-    }
-  }, [open]);
 
   const handleAdd = async () => {
     const trimmed = name.trim();

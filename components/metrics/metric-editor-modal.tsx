@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +31,8 @@ import {
   IconChartDots3,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
+import { MetricHelp } from "./metric-help";
+import type { MetricDefinition } from "@/lib/metrics/definition";
 import { MetricChart } from "@/components/metrics/metric-chart";
 
 const MonacoCodeEditor = dynamic(
@@ -41,6 +43,11 @@ const MonacoCodeEditor = dynamic(
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type MetricFormData = {
+  category?: string;
+  notes?: string;
+  valueFormat?: MetricDefinition["valueFormat"];
+  trendDirection?: MetricDefinition["trendDirection"];
+  kpiAggregation?: MetricDefinition["kpiAggregation"];
   id?: string;
   name: string;
   description: string;
@@ -95,6 +102,7 @@ GROUP BY period
 ORDER BY period`;
 
 const EMPTY: MetricFormData = {
+  category: "General", notes: "", valueFormat: "auto", trendDirection: "neutral", kpiAggregation: "latest",
   name: "",
   description: "",
   sql: STARTER_SQL,
@@ -129,7 +137,7 @@ function StepIndicator({
             onClick={() => !isDisabled && onStepClick(i)}
             disabled={isDisabled}
             className={[
-              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 border",
+              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-colors duration-200 motion-reduce:transition-none border",
               isDisabled
                 ? "bg-muted/20 text-muted-foreground/40 border-transparent cursor-not-allowed"
                 : isActive
@@ -172,18 +180,15 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
   const [previewRows, setPreviewRows] = useState<Row[]>([]);
   const [previewRowCount, setPreviewRowCount] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    setForm(initial || EMPTY);
-    setStep(0);
-    setError("");
-    setPreviewColumns([]);
-    setPreviewRows([]);
-    setPreviewRowCount(null);
-  }, [open, initial]);
+  const previewController = useRef<AbortController | null>(null);
+  useEffect(() => () => previewController.current?.abort(), []);
 
   const update = useCallback(<K extends keyof MetricFormData>(key: K, value: MetricFormData[K]) => {
-    setForm((p) => ({ ...p, [key]: value }));
+    if (key === "sql" || key === "defaultWindow") {
+      previewController.current?.abort();
+      setRunning(false); setPreviewRows([]); setPreviewColumns([]); setPreviewRowCount(null);
+    }
+    setForm((p) => ({ ...p, [key]: value, ...(key === "xColumn" ? { yColumns: p.yColumns.filter(column => column !== value) } : {}) }));
     setError("");
   }, []);
 
@@ -223,6 +228,9 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
   };
 
   const runPreview = async () => {
+    previewController.current?.abort();
+    const controller = new AbortController();
+    previewController.current = controller;
     setRunning(true);
     setError("");
     try {
@@ -230,9 +238,12 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "previewSql", sql: form.sql, window: form.defaultWindow }),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]),
       });
       const j = await res.json();
-      if (!j.ok) {
+      if (controller.signal.aborted) return;
+      if (!res.ok || !j.ok) {
+        setPreviewRowCount(null);
         setError(j.error || "Query failed.");
         setPreviewColumns([]);
         setPreviewRows([]);
@@ -243,16 +254,16 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
       setPreviewRowCount(j.rowCount ?? null);
       if (!form.xColumn && j.columns?.[0]) update("xColumn", j.columns[0].name);
       if ((form.yColumns?.length ?? 0) === 0 && j.columns?.length > 1)
-        update("yColumns", j.columns.slice(1).map((c: Column) => c.name));
+        update("yColumns", j.columns.slice(1).filter((c: Column) => /int|decimal|float|double/.test(c.type || "") || j.rows?.some((row: Row) => typeof row[c.name] === "number")).map((c: Column) => c.name).slice(0, 1));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run query.");
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Failed to run query.");
     } finally {
-      setRunning(false);
+      if (!controller.signal.aborted) setRunning(false);
     }
   };
 
   const save = async () => {
-    const err = validateStep(0) || validateStep(1);
+    const err = validateStep(0) || validateStep(1) || (!form.yColumns.length ? "Choose at least one numeric value column." : form.chartType !== "kpi" && !form.xColumn ? "Choose a category or date column." : null);
     if (err) { setError(err); return; }
     setSaving(true);
     setError("");
@@ -260,6 +271,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
       const res = await fetch("/api/metrics", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(60000),
         body: JSON.stringify({
           action: isEdit ? "updateMetric" : "createMetric",
           id: form.id,
@@ -270,28 +282,33 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
           xColumn: form.xColumn,
           yColumns: form.yColumns,
           defaultWindow: form.defaultWindow,
+          category: form.category || "General", notes: form.notes || "", valueFormat: form.valueFormat || "auto", trendDirection: form.trendDirection || "neutral", kpiAggregation: form.kpiAggregation || "sum",
         }),
       });
       const j = await res.json();
       if (!j.ok) { setError(j.error || "Failed to save."); return; }
       onSaved();
       onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to save this metric. Your edits are still here.");
     } finally {
       setSaving(false);
     }
   };
 
   const handleClose = () => {
+    if (saving) return;
+    previewController.current?.abort();
     setForm(EMPTY);
     setError("");
     setStep(0);
     onClose();
   };
 
-  const xCandidates = useMemo(() => previewColumns.map((c) => c.name), [previewColumns]);
+  const xCandidates = useMemo(() => previewColumns.length ? previewColumns.map((c) => c.name) : [form.xColumn, ...form.yColumns].filter(Boolean), [previewColumns, form.xColumn, form.yColumns]);
   const yCandidates = useMemo(
-    () => previewColumns.filter((c) => c.name !== form.xColumn).map((c) => c.name),
-    [previewColumns, form.xColumn],
+    () => xCandidates.filter(column => column !== form.xColumn),
+    [xCandidates, form.xColumn],
   );
 
   // ── Step renderers ─────────────────────────────────────────────────────────
@@ -331,16 +348,19 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
         />
       </div>
 
+      <div className="flex flex-col gap-1.5"><Label htmlFor="m-category">Category</Label><Input id="m-category" value={form.category || ""} maxLength={60} placeholder="e.g. Engagement" onChange={event => update("category", event.target.value)} /></div>
+      <div className="flex flex-col gap-1.5"><Label htmlFor="m-notes">How to read it</Label><Textarea id="m-notes" value={form.notes || ""} onChange={event => update("notes", event.target.value)} rows={4} placeholder="Explain the calculation, who is included, what a change means, and any caveats." /><p className="text-xs text-muted-foreground">Shown in Definition & interpretation. Include the denominator for a rate and any incomplete-period rules.</p></div>
       <div className="flex flex-col gap-1.5">
         <Label className="text-xs font-semibold text-foreground/80">Default time range</Label>
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
           {WINDOW_OPTIONS.map((w) => (
             <button
               key={w.key}
               type="button"
               onClick={() => update("defaultWindow", w.key)}
+              aria-pressed={form.defaultWindow === w.key}
               className={[
-                "flex flex-col items-center gap-1 rounded-xl border-2 p-3 transition-all duration-200 cursor-pointer",
+                "flex flex-col items-center gap-1 rounded-xl border-2 p-3 transition-colors duration-200 motion-reduce:transition-none cursor-pointer",
                 form.defaultWindow === w.key
                   ? "border-primary bg-primary/5 text-primary"
                   : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:bg-muted/40 hover:text-foreground",
@@ -386,7 +406,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
           </div>
           <Button size="sm" onClick={runPreview} disabled={running} className="gap-1.5 h-7 shrink-0 cursor-pointer">
             {running
-              ? <IconLoader2 className="size-3 animate-spin" />
+              ? <IconLoader2 className="size-3 motion-safe:animate-spin" />
               : <IconPlayerPlay className="size-3" />}
             Test query
           </Button>
@@ -394,7 +414,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
+        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
           <pre className="whitespace-pre-wrap font-sans">{error}</pre>
         </div>
       )}
@@ -423,14 +443,15 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
         <p className="text-xs text-muted-foreground mt-0.5">Pick a chart type and map your columns</p>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {CHART_TYPES.map((ct) => (
           <button
             key={ct.key}
             type="button"
             onClick={() => update("chartType", ct.key)}
+            aria-pressed={form.chartType === ct.key}
             className={[
-              "flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-all duration-200 cursor-pointer",
+              "flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-colors duration-200 motion-reduce:transition-none cursor-pointer",
               form.chartType === ct.key
                 ? "border-primary bg-primary/5"
                 : "border-border bg-background hover:border-primary/40 hover:bg-muted/40",
@@ -447,7 +468,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
         ))}
       </div>
 
-      {previewColumns.length > 0 ? (
+      {xCandidates.length > 0 ? (
         <>
           <div className="flex flex-col gap-1.5">
             <Label className="text-xs font-semibold text-foreground/80">
@@ -459,6 +480,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
                   key={c}
                   type="button"
                   onClick={() => update("xColumn", c)}
+                  aria-pressed={form.xColumn === c}
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs font-mono transition-colors cursor-pointer",
                     form.xColumn === c
@@ -483,6 +505,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
                   <button
                     key={c}
                     type="button"
+                    aria-pressed={selected}
                     onClick={() =>
                       update("yColumns", selected ? form.yColumns.filter((x) => x !== c) : [...form.yColumns, c])
                     }
@@ -508,6 +531,12 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
         </div>
       )}
 
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="text-sm">Value format<select aria-label="Value format" value={form.valueFormat || "auto"} onChange={event => update("valueFormat", event.target.value as MetricDefinition["valueFormat"])} className="mt-1 block h-10 w-full rounded-md border bg-background px-2"><option value="auto">Auto: detect % in column names</option><option value="number">Number</option><option value="percent">Percentage (0?100)</option></select></label>
+        <label className="text-sm">Favorable direction<select aria-label="Favorable direction" value={form.trendDirection || "neutral"} onChange={event => update("trendDirection", event.target.value as MetricDefinition["trendDirection"])} className="mt-1 block h-10 w-full rounded-md border bg-background px-2"><option value="neutral">Neutral, no good/bad coloring</option><option value="higher">Higher is better</option><option value="lower">Lower is better</option></select></label>
+      </div>
+      <div className="flex items-center text-xs text-muted-foreground">Percentage values and change<MetricHelp label="Percentage formatting"><p>A SQL value of 25 is displayed as 25%. Values are not multiplied by 100. Use Auto when mixing rates and counts, with % in the rate column names. Changes in rates are expressed in percentage points.</p></MetricHelp></div>
+      {form.chartType === "kpi" && <label className="text-sm">Combine rows<select aria-label="KPI aggregation" value={form.kpiAggregation || "sum"} onChange={event => update("kpiAggregation", event.target.value as MetricDefinition["kpiAggregation"])} className="mt-1 block h-10 w-full rounded-md border bg-background px-2"><option value="latest">Last returned row (query order)</option><option value="sum">Sum of rows</option><option value="average">Unweighted average of rows</option></select><span className="mt-1 block text-xs text-muted-foreground">Do not sum percentages or overlapping distinct counts. For weighted rates, calculate the numerator and denominator in SQL.</span></label>}
       {previewRows.length > 0 && (
         <div className="rounded-xl border bg-muted/20 divide-y">
           <div className="px-4 py-2.5">
@@ -519,6 +548,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
               xColumn={form.xColumn || previewColumns[0]?.name || ""}
               yColumns={form.yColumns.length > 0 ? form.yColumns : previewColumns.slice(1).map((c) => c.name)}
               rows={previewRows}
+              sql={form.sql} valueFormat={form.valueFormat} kpiAggregation={form.kpiAggregation}
             />
           </div>
         </div>
@@ -569,7 +599,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
           {step === 2 && renderChartStep()}
 
           {error && step !== 1 && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive mt-4">
+            <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive mt-4">
               {error}
             </div>
           )}
@@ -602,7 +632,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
                   className="cursor-pointer"
                 >
                   {saving
-                    ? <><IconLoader2 className="size-4 mr-2 animate-spin" /> Saving…</>
+                    ? <><IconLoader2 className="size-4 mr-2 motion-safe:animate-spin" /> Saving…</>
                     : isEdit ? "Save changes" : "Create metric"}
                 </Button>
               )}

@@ -15,34 +15,8 @@ import {
 } from "@tabler/icons-react";
 import { SourceBadge } from "@/components/mobile-apps/source-badge";
 
-export type ReportPoint = { date: string; metrics: unknown; source?: string | null };
-export type TrafficSource = { dimensions: unknown; metrics: unknown };
-export type ReportFileRow = {
-  report: string;
-  dimension: string;
-  object_path: string;
-  yyyy_mm: string | null;
-  size_bytes: number | string | null;
-  downloaded_at: string | null;
-  rows_count: number | string | null;
-  status: string | null;
-  error_message?: string | null;
-};
-export type ReportBreakdown = {
-  report: string;
-  dimension: string;
-  dimension_value: string;
-  date: string;
-  metrics: unknown;
-  dimensions?: unknown;
-};
-export type ReportFreshness = {
-  status: string;
-  latestOfficialMonth: string | null;
-  latestProcessedMonth: string | null;
-  processedAt: string | null;
-  checkedAt: string | null;
-};
+import type { ReportPoint, TrafficSource, ReportFileRow, ReportBreakdown, ReportFreshness } from "@/lib/mobile-apps/detail-data";
+export type { ReportPoint, TrafficSource, ReportFileRow, ReportBreakdown, ReportFreshness } from "@/lib/mobile-apps/detail-data";
 
 function fmtMonth(yyyymm: string | null): string {
   if (!yyyymm || yyyymm.length !== 6) return yyyymm ?? "—";
@@ -74,7 +48,7 @@ function FreshnessBadge({ freshness }: { freshness: ReportFreshness }) {
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${m.cls}`}
       title={months ? `Google Play reports — ${months}${freshness.processedAt ? ` · processed at ${freshness.processedAt}` : ""}` : "Google Play report freshness"}
     >
-      <span className={`size-1.5 rounded-full bg-current ${m.pulse ? "animate-pulse" : ""}`} />
+      <span className={`size-1.5 rounded-full bg-current ${m.pulse ? "motion-safe:animate-pulse" : ""}`} />
       {m.label}
       {months ? <span className="font-normal opacity-70">· {months}</span> : null}
     </span>
@@ -154,7 +128,7 @@ function MiniArea({
   series: { key: string; color: string }[];
 }) {
   if (data.length < 2) {
-    return <div className="flex h-24 items-center justify-center text-xs text-muted-foreground/60">Not enough data yet</div>;
+    return <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">Not enough data yet</div>;
   }
   return (
     <div className="h-24">
@@ -291,12 +265,6 @@ export function PlayReportsCard({
 
   const hasData =
     installs.length > 0 || crashes.length > 0 || storePerformance.length > 0 || trafficSources.length > 0 || files.length > 0;
-  // Render even with no data when reports are actively being worked on, so the user
-  // sees "Refreshing…" instead of an empty void. Stay hidden only when there is
-  // nothing to show and nothing happening.
-  const activeStatus = freshness && ["refreshing", "stale", "failed"].includes(freshness.status);
-  if (!hasData && !activeStatus) return null;
-
   return (
     <section className="w-full rounded-2xl border bg-card p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -315,11 +283,15 @@ export function PlayReportsCard({
               Showing the last processed Google report while the latest official CSV is being processed.
             </p>
           ) : null}
-          {freshness && !hasData && activeStatus ? (
+          {!hasData ? (
             <p className="mt-1.5 text-xs text-muted-foreground">
-              {freshness.status === "failed"
+              {freshness?.status === "failed"
                 ? "The latest official report could not be processed. Try Refresh reports."
-                : "Fetching the latest official Google Play reports…"}
+                : freshness?.status === "refreshing"
+                  ? "Fetching the latest official Google Play reports…"
+                  : freshness?.status === "not_configured"
+                    ? "Configure Google Play reports in Settings to start importing."
+                    : "No report data is available yet. Use Refresh reports to check for published exports."}
             </p>
           ) : null}
         </div>
@@ -339,7 +311,7 @@ export function PlayReportsCard({
             disabled={!onRefresh || refreshing}
             className="inline-flex items-center gap-1.5 rounded-lg border bg-background px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <IconRefresh className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            <IconRefresh className={`size-3.5 ${refreshing ? "motion-safe:animate-spin" : ""}`} />
             {refreshing ? "Refreshing…" : "Refresh reports"}
           </button>
         </div>
@@ -361,7 +333,7 @@ export function PlayReportsCard({
             <span className="ml-1.5 text-xs font-normal text-muted-foreground">active</span>
           </div>
           <MiniArea data={installData} series={[{ key: "installs", color: "var(--chart-3)" }, { key: "uninstalls", color: "var(--destructive)" }]} />
-          <p className="mt-1 text-[10px] text-muted-foreground/60">
+          <p className="mt-1 text-[10px] text-muted-foreground">
             Daily installs vs uninstalls{uninstallRate != null ? ` · ${uninstallRate.toFixed(0)}% uninstall rate` : ""}
           </p>
         </div>
@@ -376,7 +348,7 @@ export function PlayReportsCard({
             {dailyAnrs != null ? <span className="ml-2 text-sm text-muted-foreground">· {dailyAnrs.toLocaleString()} ANRs</span> : null}
           </div>
           <MiniArea data={crashData} series={[{ key: "crashes", color: "var(--destructive)" }, { key: "anrs", color: "var(--chart-4)" }]} />
-          <p className="mt-1 text-[10px] text-muted-foreground/60">
+          <p className="mt-1 text-[10px] text-muted-foreground">
             Daily crashes &amp; ANRs{crashesPer1k != null ? ` · ~${crashesPer1k.toFixed(1)}/1k installs (approx)` : ""}
           </p>
         </div>
@@ -390,7 +362,7 @@ export function PlayReportsCard({
             <span className="ml-1.5 text-xs font-normal text-muted-foreground">conversion</span>
           </div>
           <MiniArea data={spData} series={[{ key: "visitors", color: "var(--chart-2)" }]} />
-          <p className="mt-1 text-[10px] text-muted-foreground/60">Store listing visitors · acquisitions ÷ visitors</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">Store listing visitors · acquisitions ÷ visitors</p>
         </div>
       </div>
 

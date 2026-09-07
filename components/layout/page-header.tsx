@@ -29,11 +29,11 @@ export function PageHeader({ page, crumbs = [], actions }: Props) {
   return (
     <header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
       <div className="flex w-full items-center gap-2 px-3 sm:px-4 lg:px-6">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mx-2 hidden h-4 md:flex" />
-          <Breadcrumb>
-            <BreadcrumbList>
+          <Breadcrumb className="min-w-0">
+            <BreadcrumbList className="flex-nowrap">
               {crumbs.map((crumb, index) => (
                 <Fragment key={crumb.href}>
                   {index > 0 && <BreadcrumbSeparator className="hidden md:block" />}
@@ -45,13 +45,13 @@ export function PageHeader({ page, crumbs = [], actions }: Props) {
                 </Fragment>
               ))}
               {crumbs.length > 0 && <BreadcrumbSeparator className="hidden md:block" />}
-              <BreadcrumbItem>
-                <BreadcrumbPage>{page}</BreadcrumbPage>
+              <BreadcrumbItem className="min-w-0">
+                <BreadcrumbPage className="truncate">{page}</BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        {actions ? <div className="ml-auto flex items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
     </header>
   );

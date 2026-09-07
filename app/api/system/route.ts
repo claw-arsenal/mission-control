@@ -6,7 +6,7 @@ import { rm, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const execFileAsync = promisify(execFile);
-const PROJECT_ROOT = resolve(process.cwd());
+const PROJECT_ROOT = resolve(/*turbopackIgnore: true*/ process.cwd());
 
 type Json = Record<string, unknown>;
 const ok = (data: Json = {}) => NextResponse.json({ ok: true, ...data });

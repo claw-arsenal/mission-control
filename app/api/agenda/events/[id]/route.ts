@@ -176,6 +176,12 @@ export async function PATCH(
     // ── Check for running occurrences ──────────────────────────────────────────
     const editScope = body.editScope as string | undefined;
     const occurrenceId = body.occurrenceId as string | undefined;
+    if (editScope !== undefined && editScope !== "single" && editScope !== "this_and_future") {
+      return fail("Invalid edit scope.");
+    }
+    if (editScope && (typeof occurrenceId !== "string" || !occurrenceId.trim())) {
+      return fail("The selected occurrence is not available yet. Refresh the agenda and try again.");
+    }
 
     const [runningOcc] = await sql`
       SELECT id FROM agenda_occurrences
@@ -291,7 +297,8 @@ export async function PATCH(
       // Split series: end existing series at the occurrence before this one,
       // create a new series starting from this occurrence's date.
       const [occurrence] = await sql`
-        select scheduled_for from agenda_occurrences where id = ${occurrenceId} limit 1
+        select scheduled_for from agenda_occurrences
+        where id = ${occurrenceId} and agenda_event_id = ${id} limit 1
       `;
       if (!occurrence) return fail("Occurrence not found.", 404);
 

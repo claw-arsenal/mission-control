@@ -1,5 +1,7 @@
 import { getSql } from "@/lib/local-db";
 import { MODULES, type ModuleId } from "@/lib/modules/registry";
+import { discoverSkills } from "@/lib/skills/discovery";
+import { moduleAvailability } from "./availability";
 
 /**
  * Module enablement is read often and changes rarely. Cache the snapshot
@@ -7,6 +9,7 @@ import { MODULES, type ModuleId } from "@/lib/modules/registry";
  */
 type Snapshot = {
   enabled: Set<ModuleId>;
+  availability: Record<string, { available: boolean; reason: string | null }>;
   fetchedAt: number;
 };
 
@@ -27,12 +30,11 @@ async function ensureSchema(sql: ReturnType<typeof getSql>) {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `;
-  // Seed missing rows with enabled=true so a fresh boot doesn't hide existing
-  // features. Idempotent — only inserts rows for module ids that aren't already present.
+  // Keep existing choices. Newly introduced optional modules start disabled.
   for (const m of MODULES) {
     await sql`
       INSERT INTO module_state (module_id, enabled, enabled_at)
-      VALUES (${m.id}, true, now())
+      VALUES (${m.id}, ${m.core}, case when ${m.core} then now() else null end)
       ON CONFLICT (module_id) DO NOTHING
     `;
   }
@@ -43,10 +45,17 @@ async function loadSnapshot(): Promise<Snapshot> {
   await ensureSchema(sql);
   const rows = await sql`select module_id, enabled from module_state` as Array<{ module_id: string; enabled: boolean }>;
   const enabled = new Set<ModuleId>();
-  for (const r of rows) {
-    if (r.enabled) enabled.add(r.module_id as ModuleId);
+  let skills: ReturnType<typeof discoverSkills> = [];
+  let discoveryError = false;
+  try { skills = discoverSkills(); } catch { discoveryError = true; }
+  const availability: Snapshot["availability"] = {};
+  for (const def of MODULES) {
+    availability[def.id] = discoveryError && def.skill
+      ? { available: false, reason: "Skill discovery failed. Check OpenClaw configuration and directory access." }
+      : moduleAvailability(def, skills);
+    if (def.core || (rows.some(r => r.module_id === def.id && r.enabled) && availability[def.id].available)) enabled.add(def.id);
   }
-  return { enabled, fetchedAt: Date.now() };
+  return { enabled, availability, fetchedAt: Date.now() };
 }
 
 export async function readModuleSnapshot(force = false): Promise<Snapshot> {

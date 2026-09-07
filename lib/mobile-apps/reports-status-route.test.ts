@@ -31,6 +31,13 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("GET /api/mobile-apps/reports/status", () => {
+  it.each(["jobId", "appId", "listingId"])("rejects an invalid %s without broadening the query", async field => {
+    const { fn, calls } = routerSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    const response = await GET(new Request(`http://localhost/api/mobile-apps/reports/status?${field}=bad-id`));
+    expect(response.status).toBe(422);
+    expect(calls).toHaveLength(0);
+  });
   it("returns recent jobs and freshness for an appId", async () => {
     const { fn, calls } = routerSql();
     vi.mocked(getSql).mockReturnValue(fn);

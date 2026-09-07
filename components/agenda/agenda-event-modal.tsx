@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgendaSimulateModal } from "@/components/agenda/agenda-simulate-modal";
 import { getProviderLabel } from "@/lib/models";
+import { parseRecurrenceRule } from "@/lib/agenda/recurrence";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ type RecurrenceType = "none" | "daily" | "weekly" | "monthly";
 type TaskType = "one_time" | "repeatable";
 type StartDateMode = "now" | "specific";
 type EndDateMode = "forever" | "specific";
-type Frequency = "daily" | "weekly";
+type Frequency = "daily" | "weekly" | "monthly";
 
 export type AgendaEventFormData = {
   title: string;
@@ -65,6 +66,7 @@ export type AgendaEventFormData = {
   endTime: string;
   timezone: string;
   recurrence: RecurrenceType;
+  recurrenceRule?: string | null;
   weekdays: string[];
   recurrenceUntil: string;
   editOccurrenceId?: string;
@@ -95,7 +97,7 @@ type Props = {
   initialData?: Partial<AgendaEventFormData>;
   isReadOnly?: boolean;
   onClose: () => void;
-  onSave: (data: AgendaEventFormData) => void;
+  onSave: (data: AgendaEventFormData) => void | Promise<void>;
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -218,32 +220,18 @@ const defaultForm: AgendaEventFormData = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function parseRecurrence(recurrenceRule: string | null): { type: RecurrenceType; weekdays: string[] } {
-  if (!recurrenceRule || recurrenceRule === "none") return { type: "none", weekdays: [] };
-  const bydayMatch = recurrenceRule.match(/BYDAY=([^;]+)/);
-  if (bydayMatch) {
-    const dayMap: Record<string, string> = { SU: "0", MO: "1", TU: "2", WE: "3", TH: "4", FR: "5", SA: "6" };
-    const days = bydayMatch[1].split(",").map((d) => dayMap[d] ?? d);
-    return { type: "weekly", weekdays: days };
-  }
-  if (recurrenceRule.includes("FREQ=DAILY")) return { type: "daily", weekdays: [] };
-  if (recurrenceRule.includes("FREQ=WEEKLY")) return { type: "weekly", weekdays: [] };
-  if (recurrenceRule.includes("FREQ=MONTHLY")) return { type: "monthly", weekdays: [] };
-  return { type: "none", weekdays: [] };
-}
-
 function buildInitialForm(data: Partial<AgendaEventFormData>): AgendaEventFormData {
   const validTypes: RecurrenceType[] = ["none", "daily", "weekly", "monthly"];
   const isValidType = validTypes.includes(data.recurrence as RecurrenceType);
 
   const parsed = isValidType
     ? { type: data.recurrence as RecurrenceType, weekdays: data.weekdays ?? [] }
-    : parseRecurrence(data.recurrence as unknown as string | null);
+    : parseRecurrenceRule(data.recurrence as unknown as string | null);
 
   let taskType: TaskType = data.taskType ?? "one_time";
   let frequency: Frequency = data.frequency ?? "daily";
   if (!data.taskType) {
-    if (parsed.type === "daily" || parsed.type === "weekly") {
+    if (parsed.type === "daily" || parsed.type === "weekly" || parsed.type === "monthly") {
       taskType = "repeatable";
       frequency = parsed.type;
     } else {
@@ -351,7 +339,7 @@ function StepIndicator({ currentStep, onStepClick, canReach }: { currentStep: nu
             onClick={() => !isDisabled && onStepClick(i)}
             disabled={isDisabled}
             className={[
-              "flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg transition-all duration-200 border",
+              "min-w-0 flex-1 flex flex-col sm:flex-row items-center gap-1 sm:gap-2 px-1 sm:px-3 py-2.5 rounded-lg transition-all duration-200 border",
               isDisabled
                 ? "bg-muted/20 text-muted-foreground/40 border-transparent cursor-not-allowed"
                 : isActive
@@ -387,6 +375,8 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
   const isEditing = !!initialData?.title;
   const [form, setForm] = useState<AgendaEventFormData>(initialData ? buildInitialForm(initialData) : defaultForm);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [step, setStep] = useState(0);
   const [agendaTimeStepMinutes, setAgendaTimeStepMinutes] = useState(() => {
     if (typeof window === "undefined") return 15;
@@ -559,8 +549,8 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
     setStep(i);
   };
 
-  const handleSave = () => {
-    if (isReadOnly) return;
+  const handleSave = async () => {
+    if (isReadOnly || savingRef.current) return;
     const err = validateStep(1) || validateStep(2);
     if (err) { setError(err); return; }
 
@@ -572,18 +562,26 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
     const saveData: AgendaEventFormData = {
       ...form,
       recurrence: derivedRecurrence,
-      startDate: form.startDateMode === "now" && form.taskType === "repeatable" ? new Date().toISOString().split("T")[0] : form.startDate,
+      startDate: form.startDateMode === "now" && form.taskType === "repeatable" ? getTodayInTz(form.timezone) : form.startDate,
       endDate: form.endDateMode === "forever" ? "" : form.endDate,
       timeStepMinutes: agendaTimeStepMinutes,
     };
 
-    onSave(saveData);
-    setForm(defaultForm);
+    savingRef.current = true;
+    setSaving(true);
     setError("");
-    setStep(0);
+    try {
+      await onSave(saveData);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save this event. Try again.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const handleClose = () => {
+    if (savingRef.current) return;
     setForm(defaultForm);
     setError("");
     setStep(0);
@@ -1018,6 +1016,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                 <SelectContent>
                   <SelectItem value="daily">Daily</SelectItem>
                   <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1059,6 +1058,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                     size="sm"
                     variant={form.weekdays.includes(day.value) ? "default" : "outline"}
                     onClick={() => toggleWeekday(day.value)}
+                    aria-pressed={form.weekdays.includes(day.value)}
                     className="h-9 text-xs font-semibold cursor-pointer w-full"
                   >
                     {day.label}
@@ -1137,7 +1137,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
         <Label htmlFor="ae-tz" className="text-xs font-semibold text-foreground/80">
           Timezone
         </Label>
-        <Select value={form.timezone} onValueChange={(v) => { updateField("timezone", v); updateField("startDate", getTodayInTz(v)); updateField("startTime", getCurrentTimeInTz(v, agendaTimeStepMinutes)); }}>
+        <Select value={form.timezone} onValueChange={(v) => updateField("timezone", v)}>
           <SelectTrigger id="ae-tz" className="h-10 w-full cursor-pointer">
             <SelectValue />
           </SelectTrigger>
@@ -1147,6 +1147,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
             ))}
           </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">The date and time above are local to this timezone.</p>
       </div>
     </div>
   );
@@ -1188,7 +1189,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
             </>
           ) : (
             <>
-              <ReviewRow label="Frequency" value={form.frequency === "daily" ? "Daily" : "Weekly"} />
+              <ReviewRow label="Frequency" value={form.frequency === "daily" ? "Daily" : form.frequency === "weekly" ? "Weekly" : "Monthly"} />
               {form.frequency === "weekly" && weekdayLabels && (
                 <ReviewRow label="Days" value={weekdayLabels} />
               )}
@@ -1287,7 +1288,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) handleClose(); }}>
-      <DialogContent className="sm:max-w-[600px] max-h-[92vh] overflow-y-auto p-0">
+      <DialogContent className="min-w-0 grid-cols-[minmax(0,1fr)] sm:max-w-[600px] max-h-[92vh] overflow-y-auto p-0">
         {/* Header */}
         <DialogHeader className="px-6 pt-6 pb-0">
           <div className="flex items-center gap-3 mb-1">
@@ -1314,27 +1315,28 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
         </DialogHeader>
 
         {/* Step indicator */}
-        <div className="px-6 pt-3">
+        <fieldset disabled={saving} className="contents">
+        <div className="min-w-0 px-4 sm:px-6 pt-3">
           <StepIndicator currentStep={step} onStepClick={goToStep} canReach={canReachStep} />
         </div>
 
         {/* Step content */}
-        <div className="px-6 py-4 min-h-[280px]">
+        <div className="min-w-0 px-4 sm:px-6 py-4 min-h-[280px]">
           {step === 0 && renderTypeStep()}
           {step === 1 && renderDetailsStep()}
           {step === 2 && renderScheduleStep()}
           {step === 3 && renderReviewStep()}
 
           {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive mt-4">
+            <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive mt-4">
               {error}
             </div>
           )}
         </div>
 
         {/* Footer navigation */}
-        <DialogFooter className="px-6 pb-6 pt-0">
-          <div className="flex items-center justify-between w-full gap-2">
+        <DialogFooter className="px-4 sm:px-6 pb-6 pt-0">
+          <div className="flex flex-wrap items-center justify-between w-full gap-2">
             <div>
               {step > 0 && (
                 <Button variant="ghost" onClick={goBack} className="gap-1.5 cursor-pointer">
@@ -1359,11 +1361,11 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                       <span>
                         <Button
                           onClick={handleSave}
-                          disabled={isReadOnly}
+                          disabled={isReadOnly || saving}
                           className="gap-1.5 cursor-pointer"
                         >
                           <IconCalendarPlus className="size-3.5" />
-                          {isEditing ? "Save changes" : "Create event"}
+                          {saving ? "Saving…" : isEditing ? "Save changes" : "Create event"}
                         </Button>
                       </span>
                     </TooltipTrigger>
@@ -1378,6 +1380,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
             </div>
           </div>
         </DialogFooter>
+        </fieldset>
       </DialogContent>
     </Dialog>
   );
@@ -1389,7 +1392,7 @@ function ReviewRow({ label, value, truncate }: { label: string; value: string; t
   return (
     <div className="flex items-start gap-3 px-4 py-2.5">
       <span className="text-xs font-semibold text-muted-foreground w-20 shrink-0 pt-0.5">{label}</span>
-      <span className={["text-sm text-foreground flex-1", truncate ? "line-clamp-2" : ""].join(" ")}>
+      <span className={["min-w-0 break-words text-sm text-foreground flex-1", truncate ? "line-clamp-2" : ""].join(" ")}>
         {value}
       </span>
     </div>

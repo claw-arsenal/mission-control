@@ -4,6 +4,7 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  KeyboardSensor,
   pointerWithin,
   useSensor,
   useSensors,
@@ -12,8 +13,8 @@ import {
   type DragStartEvent,
   closestCorners,
 } from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { useState } from "react";
+import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { useMemo, useState } from "react";
 import { type Assignee, type BoardState, type Ticket } from "@/types/tasks";
 import { KanbanColumn } from "./kanban-column";
 import { TicketCard } from "../shared/ticket-card";
@@ -21,6 +22,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { GhostIcon } from "lucide-react";
 
 type Props = {
+  ticketDraggingDisabled?: boolean;
   board: BoardState;
   assigneeById: Record<string, Assignee>;
   labelById?: Record<string, import("@/types/tasks").Label>;
@@ -55,17 +57,30 @@ export function KanbanView({
   onTicketDelete,
   moveColumn,
   moveTicket,
+  ticketDraggingDisabled = false,
 }: Props) {
   const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
   const [activeColumnId, setActiveColumnId] = useState<string | null>(null);
   const [dragStartTicketColumnId, setDragStartTicketColumnId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ ticketId: string; columnId: string } | null>(null);
+
+  // A hover is a preview, not a board mutation. Only a completed drop is saved.
+  const previewIds = useMemo(() => {
+    if (!preview) return visibleTicketIdsByColumn;
+    const ids = Object.fromEntries(Object.entries(visibleTicketIdsByColumn)
+      .map(([columnId, tickets]) => [columnId, tickets.filter((id) => id !== preview.ticketId)]));
+    ids[preview.columnId] = [...(ids[preview.columnId] ?? []), preview.ticketId];
+    return ids;
+  }, [preview, visibleTicketIdsByColumn]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   const getColumnIdFromOver = (overId: string, overData: Record<string, unknown> | undefined): string | null => {
     if (overData?.type === "ticket") {
+      if (preview?.ticketId === overId) return preview.columnId;
       return overData.columnId as string;
     }
 
@@ -85,6 +100,7 @@ export function KanbanView({
   };
 
   const handleDragStart = (event: DragStartEvent) => {
+    setPreview(null);
     const { active } = event;
     const data = active.data.current;
     if (data?.type === "ticket") {
@@ -105,28 +121,23 @@ export function KanbanView({
     if (activeData?.type !== "ticket") return;
 
     const ticketId = active.id as string;
-    const fromColumnId = activeData.columnId as string;
-
-    // Determine target column
     const toColumnId = getColumnIdFromOver(over.id as string, overData);
+    if (!toColumnId || toColumnId === (preview?.columnId ?? dragStartTicketColumnId)) return;
+    setPreview({ ticketId, columnId: toColumnId });
+  };
 
-    if (!toColumnId || fromColumnId === toColumnId) return;
-
-    // Move ticket across columns immediately so the visual updates
-    const toIndex = board.ticketIdsByColumn[toColumnId]?.length ?? 0;
-    moveTicket(ticketId, fromColumnId, toColumnId, toIndex, false);
-
-    // Update the active data reference
-    if (activeData) activeData.columnId = toColumnId;
+  const resetDrag = () => {
+    setActiveTicket(null);
+    setActiveColumnId(null);
+    setDragStartTicketColumnId(null);
+    setPreview(null);
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
 
     if (!over) {
-      setActiveTicket(null);
-      setActiveColumnId(null);
-      setDragStartTicketColumnId(null);
+      resetDrag();
       return;
     }
 
@@ -144,9 +155,7 @@ export function KanbanView({
 
     if (activeData?.type === "ticket") {
       const toColumnId = getColumnIdFromOver(over.id as string, overData);
-      const currentColumnId = activeData.columnId as string;
-      const sourceColumnId = dragStartTicketColumnId ?? currentColumnId;
-      const persistFromColumnId = sourceColumnId !== toColumnId ? sourceColumnId : undefined;
+      const sourceColumnId = dragStartTicketColumnId ?? activeData.columnId as string;
 
       if (toColumnId && overData?.type === "ticket" && active.id !== over.id) {
         const ids = board.ticketIdsByColumn[toColumnId] ?? [];
@@ -154,11 +163,10 @@ export function KanbanView({
         if (toIndex >= 0) {
           moveTicket(
             active.id as string,
-            currentColumnId,
+            sourceColumnId,
             toColumnId,
             toIndex,
             true,
-            persistFromColumnId,
           );
         }
       } else if (toColumnId) {
@@ -167,38 +175,45 @@ export function KanbanView({
         const toIndex = currentIndex >= 0 ? currentIndex : ids.length;
         moveTicket(
           active.id as string,
-          currentColumnId,
+          sourceColumnId,
           toColumnId,
           toIndex,
           true,
-          persistFromColumnId,
         );
       }
     }
 
-    setActiveTicket(null);
-    setActiveColumnId(null);
-    setDragStartTicketColumnId(null);
+    resetDrag();
   };
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={(args) => {
-        const pointerCollisions = pointerWithin(args);
-        return pointerCollisions.length > 0 ? pointerCollisions : closestCorners(args);
+        const targets = args.active.data.current?.type === "column"
+          ? args.droppableContainers.filter(container => container.data.current?.type === "column")
+          : args.droppableContainers;
+        const scopedArgs = { ...args, droppableContainers: targets };
+        if (!args.pointerCoordinates) return closestCorners(scopedArgs);
+        const hits = pointerWithin(scopedArgs);
+        const ticketHits = hits.filter(hit => hit.data?.droppableContainer.data.current?.type === "ticket");
+        return ticketHits.length ? ticketHits : hits;
       }}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
+      onDragCancel={resetDrag}
     >
       <SortableContext items={board.columnOrder} strategy={horizontalListSortingStrategy}>
-        <div className="flex gap-3 h-full overflow-x-auto pb-4 px-1 pt-1">
+        <div className="flex h-full min-h-0 flex-col">
+        {ticketDraggingDisabled && <p className="px-1 pb-2 text-xs text-muted-foreground">Choose Manual order in View settings to drag tickets. You can change a ticket’s list in its details.</p>}
+        <div className="flex gap-3 flex-1 min-h-0 overflow-x-auto pb-4 px-1 pt-1">
           {board.columnOrder.map((colId) => {
             const column = board.columns[colId];
             if (!column) return null;
-            const visibleIds = visibleTicketIdsByColumn[colId] ?? [];
-            const tickets = visibleIds.map((id) => board.tickets[id]).filter(Boolean) as Ticket[];
+            const visibleIds = previewIds[colId] ?? [];
+            const tickets = visibleIds.map((id) => board.tickets[id]).filter(Boolean)
+              .map((ticket) => ticket.id === preview?.ticketId ? { ...ticket, statusId: colId } : ticket);
 
             return (
               <KanbanColumn
@@ -209,6 +224,7 @@ export function KanbanView({
                 assigneeById={assigneeById}
                 labelById={labelById}
                 isActive={activeColumnId === colId}
+                ticketDraggingDisabled={ticketDraggingDisabled}
                 onAddTask={() => onAddTask(colId)}
                 canDeleteList={canDeleteList(colId)}
                 onDeleteList={() => void onDeleteList(colId)}
@@ -219,15 +235,16 @@ export function KanbanView({
             );
           })}
         </div>
+        </div>
       </SortableContext>
 
       <DragOverlay dropAnimation={{ duration: 150, easing: "ease" }}>
         {activeTicket ? (
-          <div className="w-72 rotate-1 shadow-2xl opacity-90">
+          <div aria-hidden="true" inert className="w-72 rotate-1 shadow-2xl opacity-90">
             <TicketCard ticket={activeTicket} assigneeById={assigneeById} labelById={labelById} onClick={() => {}} />
           </div>
         ) : activeColumnId ? (
-          <div className="w-72 rotate-1 shadow-2xl opacity-95">
+          <div aria-hidden="true" inert className="w-72 rotate-1 shadow-2xl opacity-95">
             <Card className="overflow-hidden py-0">
               <CardContent className="border-b bg-muted/30 p-3">
                 <span className="text-sm font-semibold">

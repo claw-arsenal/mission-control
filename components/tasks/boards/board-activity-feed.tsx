@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNow } from "@/hooks/use-now";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -38,8 +39,7 @@ type Props = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function relativeTime(dateStr: string): string {
-  const now = Date.now();
+function relativeTime(dateStr: string, now: number): string {
   const then = new Date(dateStr).getTime();
   if (isNaN(then)) return "";
   const diff = Math.max(0, now - then);
@@ -165,7 +165,7 @@ function ActivityList({
   toggleExpand: (id: string) => void;
   onTicketClick: (ticketId: string) => void;
 }) {
-  const now = Date.now();
+  const now = useNow().getTime();
   const startOfToday = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), new Date(now).getDate()).getTime();
   const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
   const fmtMonth = (d: Date) =>
@@ -221,7 +221,7 @@ function ActivityList({
           </span>
           {entry.occurred_at && (
             <span className="text-[9px] text-muted-foreground/60 shrink-0 tabular-nums">
-              {relativeTime(entry.occurred_at)}
+              {relativeTime(entry.occurred_at, now)}
             </span>
           )}
         </div>

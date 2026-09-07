@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { toRecurrenceRule } from "@/lib/agenda/recurrence";
 import type { EventInput } from "@fullcalendar/core";
 
 export type AgendaEventProcess = {
@@ -90,17 +91,6 @@ async function apiGet(path: string) {
   return res.json();
 }
 
-function toRecurrenceRule(recurrence: AgendaEventFormData["recurrence"], weekdays: string[]): string | null {
-  if (recurrence === "none") return null;
-  if (recurrence === "daily") return "FREQ=DAILY";
-  if (recurrence === "weekly") {
-    const days = weekdays.length > 0 ? weekdays.sort().map((d) => ["SU","MO","TU","WE","TH","FR","SA"][Number(d)]).join(",") : "MO";
-    return `FREQ=WEEKLY;BYDAY=${days}`;
-  }
-  if (recurrence === "monthly") return "FREQ=MONTHLY";
-  return null;
-}
-
 function toCalendarEvents(events: AgendaEvent[]): EventInput[] {
   return events.map((e) => {
     const latestResult = (e.latest_occurrence_status ?? null) as CalendarEventLatestResult;
@@ -145,23 +135,30 @@ export function useAgenda() {
   const [events, setEvents] = useState<AgendaEvent[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<EventInput[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const hasLoadedOnce = useRef(false);
+  const requestRef = useRef<AbortController | null>(null);
+  const rangeRef = useRef<{ start?: string; end?: string }>({});
+
+  useEffect(() => () => requestRef.current?.abort(), []);
 
   const loadEvents = useCallback(async (start?: string, end?: string) => {
-    // Only block the initial load with the loading spinner.
-    // Subsequent refetches update data in-place — no skeleton.
-    if (!hasLoadedOnce.current) {
-      setLoading(true);
-      setError("");
-    } else {
-      setError("");
-    }
+    if (start && end) rangeRef.current = { start, end };
+    const range = rangeRef.current;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setLoading(!hasLoadedOnce.current);
+    setRefreshing(hasLoadedOnce.current);
+    setError("");
     try {
       let url = "/api/agenda/events";
-      if (start && end) url += `?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-      const json = await apiGet(url);
-      if (json.ok) {
+      if (range.start && range.end) url += `?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
+      const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+      const json = await res.json();
+      if (controller.signal.aborted) return;
+      if (res.ok && json.ok) {
         const evts: AgendaEvent[] = json.events ?? [];
         setEvents(evts);
         setCalendarEvents(toCalendarEvents(evts));
@@ -170,9 +167,13 @@ export function useAgenda() {
         setError(json.error ?? "Failed to load events");
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       setError(e instanceof Error ? e.message : "Network error");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -300,6 +301,7 @@ export function useAgenda() {
     events,
     calendarEvents,
     loading,
+    refreshing,
     error,
     loadEvents,
     createEvent,

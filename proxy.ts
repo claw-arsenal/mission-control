@@ -6,6 +6,7 @@ import {
   SESSION_DURATION_SECONDS,
   SESSION_REFRESH_THRESHOLD,
 } from "@/lib/auth/session";
+import { getSessionRole } from "@/lib/auth/roles";
 
 const PUBLIC_API_PREFIX = "/api/auth";
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -59,6 +60,23 @@ export default async function proxy(req: NextRequest) {
 
   const session = await verifySession(req);
 
+  // A signed cookie proves identity, not continued membership in the allowlist.
+  if (session) {
+    try {
+      if (!await getSessionRole(session)) {
+        const denied = pathname.startsWith("/api/")
+          ? NextResponse.json({ ok: false, error: "Access has been revoked. Contact an administrator." }, { status: 403 })
+          : pathname === "/login"
+            ? NextResponse.next()
+            : NextResponse.redirect(new URL("/login", req.nextUrl.origin));
+        denied.cookies.set({ ...sessionCookieAttrs(0), value: "" });
+        return denied;
+      }
+    } catch {
+      return NextResponse.json({ ok: false, error: "Access could not be verified. Please try again." }, { status: 503 });
+    }
+  }
+
   if (pathname === "/login") {
     // Already authenticated — redirect away to avoid confusion
     if (session) return NextResponse.redirect(new URL("/dashboard", req.nextUrl.origin));
@@ -84,7 +102,8 @@ export default async function proxy(req: NextRequest) {
   // left, silently re-issue a fresh 24h cookie so active users are never logged out.
   const nowSec = Math.floor(Date.now() / 1000);
   if (session.exp !== undefined && session.exp - nowSec < SESSION_REFRESH_THRESHOLD) {
-    const { exp: _exp, ...userFields } = session;
+    const userFields = { ...session };
+    delete userFields.exp;
     const refreshed = await createSession(userFields);
     res.cookies.set({ ...sessionCookieAttrs(SESSION_DURATION_SECONDS), value: refreshed });
   }

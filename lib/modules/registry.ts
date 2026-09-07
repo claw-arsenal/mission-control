@@ -21,7 +21,6 @@ import {
   IconDeviceMobile,
   IconFileText,
   IconListDetails,
-  IconRobot,
   IconStack2,
 } from "@tabler/icons-react";
 import type { Icon as TablerIcon } from "@tabler/icons-react";
@@ -42,6 +41,8 @@ export type ModuleDefinition = {
   icon: TablerIcon;
   /** Core modules cannot be disabled. Their toggle renders as a static CORE badge. */
   core: boolean;
+  /** Trusted UI integrations declare capabilities from installed skills. */
+  skill?: { key: string; capability: string };
   /** Sidebar entry. Omitted modules (e.g. "system") don't add a nav row. */
   nav?: { title: string; url: string };
   /** Tables exclusively owned by this module. Used by the cleanup handler. */
@@ -99,9 +100,10 @@ export const MODULES: readonly ModuleDefinition[] = [
   },
   {
     id: "documents",
+    skill: { key: "mission-control", capability: "documents.read" },
     name: "Documents",
     description:
-      "Doc + code editor. Write any file (Markdown, HTML, JS, JSON, SQL, ...) and link them to Kanban tickets. Disabling permanently deletes all documents and audit history.",
+      "Doc + code editor. Write any file (Markdown, HTML, JS, JSON, SQL, ...) and link them to Kanban tickets. Disabling preserves all documents and audit history.",
     icon: IconFileText,
     core: false,
     nav: { title: "Documents", url: "/documents" },
@@ -110,9 +112,10 @@ export const MODULES: readonly ModuleDefinition[] = [
   },
   {
     id: "metrics",
+    skill: { key: "mission-control", capability: "metrics.read" },
     name: "Metrics",
     description:
-      "Custom SQL-backed charts against your external MySQL database (configured via ~/.config/openclaw/secrets.env). Paste a SELECT, pick a chart type, and switch windows daily / weekly / monthly / yearly. Disabling permanently deletes every saved chart and its run history; the external database is untouched.",
+      "Custom SQL-backed charts against your external MySQL database (configured via ~/.config/openclaw/secrets.env). Paste a SELECT, pick a chart type, and switch windows daily / weekly / monthly / yearly. Disabling preserves saved charts and run history.",
     icon: IconChartBar,
     core: false,
     nav: { title: "Metrics", url: "/metrics" },
@@ -120,9 +123,10 @@ export const MODULES: readonly ModuleDefinition[] = [
   },
   {
     id: "mobile-apps",
+    skill: { key: "mission-control", capability: "mobile-apps.reviews.read" },
     name: "Mobile Applications",
     description:
-      "Track your apps' App Store + Google Play reviews and ratings in real time, with ratings-over-time charts, agent sentiment digests, and threshold alerts. Disabling permanently deletes all tracked apps, fetched reviews, rating history, digests, and alert rules.",
+      "Track App Store and Google Play reviews, ratings, and official reports. Background checks detect published reviews; disabling preserves all app data.",
     icon: IconDeviceMobile,
     core: false,
     nav: { title: "Mobile Applications", url: "/mobile-apps" },

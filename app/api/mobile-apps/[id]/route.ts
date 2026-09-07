@@ -5,10 +5,12 @@ import { isModuleEnabled } from "@/lib/modules/state";
 import { ensureMobileAppsSchema } from "@/lib/mobile-apps/ensure-schema";
 import { loadMobileReviewsConfig } from "@/lib/mobile-apps/config";
 import { toAlpha2 } from "@/lib/mobile-apps/country-codes";
+import { normalizeTerritoryRatings } from "@/lib/mobile-apps/rating-source";
 import { readReportRollups, readLatestBreakdowns } from "@/lib/mobile-apps/report-rollups";
 import {
   checkOfficialReportFreshness,
   readStoredFreshness,
+  summarizeReportFreshness,
   type FreshnessResult,
   type ReportFreshnessState,
 } from "@/lib/mobile-apps/report-freshness";
@@ -32,10 +34,6 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-// Worst-first ordering so the headline freshness reflects whatever needs attention.
-const STATUS_ORDER: ReportFreshnessState[] = ["failed", "stale", "refreshing", "unknown", "not_configured", "fresh"];
-const NOT_FRESH = new Set<ReportFreshnessState>(["failed", "stale", "refreshing"]);
-
 function unknownFreshness(): FreshnessResult {
   return {
     status: "unknown",
@@ -49,19 +47,6 @@ function unknownFreshness(): FreshnessResult {
   };
 }
 
-function asJsonArray(v: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(v)) return v.filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === "object" && !Array.isArray(x));
-  if (typeof v === "string") {
-    try {
-      const p = JSON.parse(v);
-      return Array.isArray(p) ? p.filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === "object" && !Array.isArray(x)) : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
 /**
  * Canonical alpha-2 key for a territory, regardless of the source format.
  * App Store ratings arrive as alpha-2 (`nl`) while App Store Connect review
@@ -73,13 +58,6 @@ function territoryKey(v: unknown): string {
   const raw = String(v ?? "").trim();
   return toAlpha2(raw) ?? raw.toLowerCase();
 }
-
-type OfficialRatingRow = Record<string, unknown> & {
-  territory?: unknown;
-  avg?: unknown;
-  count?: unknown;
-  review_count?: number;
-};
 
 type ListingRow = Record<string, unknown> & {
   id: string;
@@ -137,7 +115,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       }
       for (const listing of listings) {
         const byCountry = counts.get(listing.id) ?? new Map<string, number>();
-        const ratings: OfficialRatingRow[] = asJsonArray(listing.official_ratings).map((r): OfficialRatingRow => {
+        const ratings = normalizeTerritoryRatings(listing.official_ratings).map((r) => {
           const key = territoryKey(r.territory);
           return { ...r, review_count: byCountry.get(key) ?? 0 };
         });
@@ -259,8 +237,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     }
 
     // ── Freshness contract ──
-    // Live reviews/ratings are refreshed live elsewhere; they are always "fresh" as
-    // of the listing's last sync. Google report freshness is either read cheaply from
+    // Live reviews expose the last recorded sync outcome. Google report freshness is either read cheaply from
     // the stored row (available, browser default — no GCS) or checked live (strict,
     // for skills — metadata only, never downloads). Strict never returns stale charts.
     const consistency = searchParams.get("consistency") === "strict" ? "strict" : "available";
@@ -268,7 +245,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       const t = l.last_synced_at ? String(l.last_synced_at) : null;
       return t && (!acc || t > acc) ? t : acc;
     }, null);
-    const liveReviews = { status: "fresh" as const, updatedAt: liveUpdatedAt };
+    const liveFailed = (syncRuns as Array<{ status?: string }>).some(run => run.status === "failed");
+    const liveReviews = { status: liveFailed ? "failed" : liveUpdatedAt ? "fresh" : "unknown", updatedAt: liveUpdatedAt };
 
     let googleReports: {
       status: ReportFreshnessState;
@@ -286,8 +264,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         for (const lid of googleListingIds) {
           results.push(await checkOfficialReportFreshness(sql, lid).catch(() => unknownFreshness()));
         }
-        const worst = STATUS_ORDER.find((s) => results.some((r) => r.status === s)) ?? "fresh";
-        reportsFresh = !NOT_FRESH.has(worst);
+        const verdict = summarizeReportFreshness(results.map(r => r.status), googleListingIds.length);
+        const worst = verdict.status;
+        reportsFresh = verdict.reportsFresh;
         const pick = results.find((r) => r.status === worst) ?? results[0];
         googleReports = {
           status: worst,
@@ -307,13 +286,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
           });
           jobId = job.id;
         }
-        if (!reportsFresh) strict = { httpStatus: worst === "failed" ? 503 : 202, jobId };
+        if (!reportsFresh) strict = { httpStatus: worst === "stale" || worst === "refreshing" ? 202 : 503, jobId };
       } else {
         const stored = await readStoredFreshness(sql, googleListingIds);
         if (stored.length > 0) {
-          const worst = STATUS_ORDER.find((s) => stored.some((r) => r.status === s)) ?? "fresh";
+          const verdict = summarizeReportFreshness(stored.map(r => r.status), googleListingIds.length);
+          const worst = verdict.status;
           const pick = stored.find((r) => r.status === worst) ?? stored[0];
-          reportsFresh = !NOT_FRESH.has(worst);
+          reportsFresh = verdict.reportsFresh;
           googleReports = {
             status: worst,
             latestOfficialMonth: pick.latestOfficialYyyyMm,
@@ -324,6 +304,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         } else {
           // No freshness row yet (worker/ensure-fresh hasn't run) → unknown, not stale.
           googleReports = { status: "unknown", latestOfficialMonth: null, latestProcessedMonth: null, checkedAt: null, processedAt: null };
+          reportsFresh = false;
         }
       }
     }
@@ -335,15 +316,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       // Live data (reviews/ratings/trend/summary) is still returned; `reports` is not.
       return NextResponse.json(
         {
-          ok: googleReports.status !== "failed",
+          ok: strict.httpStatus !== 503,
           status: googleReports.status,
           fresh: false,
           reportsFresh: false,
           jobId: strict.jobId,
           message:
-            googleReports.status === "failed"
-              ? "Latest official report exists but could not be processed."
-              : "Live data is fresh. Google Play reports are refreshing from the latest official CSVs.",
+            strict.httpStatus === 503
+              ? "Google Play report freshness could not be verified. Check report configuration and the latest sync result."
+              : "Google Play reports are refreshing. Cached live-store data is available.",
           app: appRows[0],
           listings,
           trend,
