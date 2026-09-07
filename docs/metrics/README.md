@@ -32,13 +32,24 @@ Reviewed 7 September 2026. Scope: the supplied 12-definition export, Metrics das
 | Rooms without a recorded end | Share of created rooms that currently lack an end timestamp. | Includes in-progress rooms and missing records; does not prove abandonment. |
 | Okey penalty reasons | Recorded penalty events by reason. | Penalties are events, not distinct affected players or an exposure-adjusted rate. |
 
-All definitions contain a short description, category, longer interpretation notes, value format, trend direction, and KPI aggregation. The full SQL is visible under **Definition & interpretation**. Missing values remain unavailable. Percentage SQL values use the 0-100 scale: 25 displays as 25%, and a move from 20% to 25% is +5 percentage points.
+All definitions contain a short description, category, longer interpretation notes, value format, trend direction, and KPI aggregation. Open **Details**, then **SQL query** for the full SQL. Missing values remain unavailable. Percentage SQL values use the 0-100 scale: 25 displays as 25%, and a move from 20% to 25% is +5 percentage points.
+
+## Simpler dashboard, 7 September follow-up
+
+- **Focus / Show all** sits beside **New metric**. Focus starts with four cards, with existing explicit selections preserved. **Choose metrics** edits the selection. Mode and selection are saved in this browser.
+- Search stays visible. **Filters** reveals category and dashboard range controls; a single-category catalog does not show an unnecessary category selector. Active filters remain visible when the panel closes. **Reset filters** restores saved ranges and clears search/category filters. Empty search results offer matching metrics outside Focus when available.
+- Two columns on desktop, one on phones. Cards emphasize the chart and range. **Details** holds the definition, card range, table view, SQL, and query timings. Long category charts initially show six entries; expansion shows up to fifteen, and the table retains every returned row.
+- Change labels explicitly say **Improved**, **Worsened**, **Up**, **Down**, or **No change**. The neutral badge no longer uses the theme's tinted background, which looked green in the live theme. Labels and icons share a semantic color. Chart/legend colors identify series independently of whether a change is favorable.
+- Card ranges and chart/table choices survive temporarily hiding a card with search, category, or Focus. The inherited range option now names the actual dashboard/saved range instead of the card override.
+- Failed connection checks retain the last known data cutoff, so cached trends keep the same completeness interpretation. Errors and retry actions remain visible.
+
+Validation: the full workspace suite passed 286 tests (25 PostgreSQL-dependent tests skipped). After adding the cutoff regression, all 45 focused Metrics tests passed (5 PostgreSQL tests skipped). Final ESLint and the production build, including TypeScript, passed. Browser checks used local sample data at 1366, 390, and 320px: keyboard switch/filter/chooser controls, light/dark colors, matching chart legends, tables, initial query failures, cached refresh failures, recovery, and horizontal overflow. No browser errors or warnings were reported. This follow-up changes local code; deployment and live-definition reconciliation remain separate work.
 
 ## Import the new export
 
 Use `metrics-export-2026-09-07-improved.json` with the updated Metrics module. The original download remains unchanged.
 
-1. Open **Import** and choose the revised JSON.
+1. Open **Metrics options**, then **Import metrics**, and choose the revised JSON.
 2. Review every add, skip, or update. Enable updating existing matches when replacing the original definitions.
 3. Confirm the reviewed import. All definition writes commit together, or none do.
 

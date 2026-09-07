@@ -1,42 +1,36 @@
 "use client";
 
 import { useState } from "react";
-import { CheckIcon, ChevronDownIcon, SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import type { MetricDef } from "@/lib/metrics/definition";
 import type { useMetricVisibility } from "@/hooks/use-metric-visibility";
 
 type Props = {
   metrics: MetricDef[];
   visibility: ReturnType<typeof useMetricVisibility>;
-  choosing: boolean;
   onChoosingChange: (choosing: boolean) => void;
 };
 
-export function MetricVisibilityControls({ metrics, visibility, choosing, onChoosingChange }: Props) {
+export function MetricViewSwitch({ visibility }: Pick<Props, "visibility">) {
+  const showAll = visibility.ready && visibility.mode === "all";
+  return <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs">
+    <span className={cn(showAll && "text-muted-foreground")}>Focus</span>
+    <Switch aria-label="Show all metrics" checked={showAll} disabled={!visibility.ready} onCheckedChange={checked => visibility.setMode(checked ? "all" : "focused")} />
+    <span className={cn(!showAll && "text-muted-foreground")}>Show all</span>
+  </label>;
+}
+
+export function MetricVisibilityControls({ metrics, visibility, onChoosingChange }: Props) {
   const [search, setSearch] = useState("");
   const selectedCount = metrics.filter(metric => visibility.selectedIds.has(metric.id)).length;
   const options = metrics.filter(metric => `${metric.name} ${metric.category || "General"}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
 
-  return <section aria-label="Dashboard metrics" className="space-y-3">
-    <div className="flex flex-wrap items-center gap-3">
-      <div role="group" aria-label="Metrics view" className="flex rounded-lg border p-1">
-        <Button size="sm" variant={visibility.mode === "focused" ? "secondary" : "ghost"} aria-pressed={visibility.mode === "focused"} onClick={() => visibility.setMode("focused")}>
-          {visibility.mode === "focused" && <CheckIcon className="size-3.5" />} Focused view
-        </Button>
-        <Button size="sm" variant={visibility.mode === "all" ? "secondary" : "ghost"} aria-pressed={visibility.mode === "all"} onClick={() => visibility.setMode("all")}>
-          {visibility.mode === "all" && <CheckIcon className="size-3.5" />} Show all
-        </Button>
-      </div>
-      <Button size="sm" variant="outline" aria-expanded={choosing} aria-controls="metric-selection" onClick={() => onChoosingChange(!choosing)}>
-        <SlidersHorizontalIcon className="size-4" /> Choose metrics <ChevronDownIcon className={`size-3.5 transition-transform ${choosing ? "rotate-180" : ""}`} />
-      </Button>
-      <p className="text-xs text-muted-foreground">{visibility.mode === "focused" ? `${selectedCount} of ${metrics.length} in your focused view` : `All ${metrics.length} metrics`} · Saved in this browser</p>
-    </div>
-    {choosing && <div id="metric-selection" className="rounded-lg border bg-muted/15 p-4">
+  return <section id="metric-selection" aria-label="Choose focused metrics" className="rounded-lg border p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-sm font-semibold">Your focused view</h2><p className="mt-1 text-xs text-muted-foreground">Choose what you check regularly. The first six are selected to get you started.</p></div>
+        <div><h2 className="text-sm font-semibold">Your focused view</h2><p className="mt-1 text-xs text-muted-foreground">Choose the metrics you check regularly. {selectedCount} selected, saved in this browser.</p></div>
         <div className="flex flex-wrap gap-1">
           <Button size="sm" variant="ghost" onClick={() => visibility.select(metrics.map(metric => metric.id))}>Select all</Button>
           <Button size="sm" variant="ghost" onClick={() => visibility.select([])}>Clear selection</Button>
@@ -52,6 +46,5 @@ export function MetricVisibilityControls({ metrics, visibility, choosing, onChoo
         </label>)}
       </fieldset>
       {!options.length && <p className="py-4 text-sm text-muted-foreground">No metric names or categories match “{search}”.</p>}
-    </div>}
   </section>;
 }

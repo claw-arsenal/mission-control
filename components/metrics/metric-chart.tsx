@@ -2,12 +2,13 @@
 
 import "./metric-chart.css";
 
-import { useId, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, Line, LineChart, Pie, PieChart, Cell, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
 import { aggregateMetric, formatMetricValue, isPercentColumn, metricNumber } from "@/lib/metrics/presentation";
 import type { MetricDefinition, ValueFormat } from "@/lib/metrics/definition";
 import { usesBucket } from "@/lib/metrics/window";
+import { Button } from "@/components/ui/button";
 
 type Row = Record<string, unknown>;
 type Props = {
@@ -32,6 +33,7 @@ export function MetricChart(props: Props) {
 
 function MetricChartContent({ type, xColumn, yColumns, rows, valueFormat = "auto", kpiAggregation = "sum", sql = "" }: Props) {
   const id = useId().replaceAll(":", "");
+  const [expanded, setExpanded] = useState(false);
   // Internal keys support SQL aliases containing spaces, dots, or brackets.
   const data = useMemo(() => rows.map(row => Object.fromEntries([
     ["category", String(row[xColumn] ?? "Unknown")],
@@ -43,7 +45,8 @@ function MetricChartContent({ type, xColumn, yColumns, rows, valueFormat = "auto
   const mixed = hasPercent && hasNumber;
   const first = yColumns[0];
   const horizontal = type === "bar" && !mixed && !usesBucket(sql) && !rows.every(row => /^\d{4}[- ]/.test(String(row[xColumn])));
-  const height = horizontal ? Math.max(260, Math.min(rows.length, 15) * 36) : 250;
+  const categoryLimit = expanded ? 15 : 6;
+  const height = horizontal ? Math.max(250, Math.min(rows.length, categoryLimit) * 36) : 250;
 
   if (!rows.length) return <div className="flex min-h-52 items-center justify-center px-5 text-center text-sm text-muted-foreground">No results in this range. Try a longer range or check the query filters.</div>;
   if (!first) return <p className="p-5 text-sm text-muted-foreground">Choose a value column in the metric editor to draw a chart.</p>;
@@ -58,7 +61,7 @@ function MetricChartContent({ type, xColumn, yColumns, rows, valueFormat = "auto
       <dl className="space-y-1.5">{payload.map(item => {
         const index = Number(String(item.dataKey).replace("series", ""));
         const column = yColumns[index];
-        return <div key={String(item.dataKey)} className="flex justify-between gap-5"><dt>{column}</dt><dd className="font-medium tabular-nums">{formatMetricValue(item.value, column, valueFormat)}</dd></div>;
+        return <div key={String(item.dataKey)} className="flex justify-between gap-5"><dt className="flex min-w-0 items-center gap-2"><span className="size-2.5 shrink-0 rounded-sm" style={{ background: COLORS[index % COLORS.length] }} /><span className="break-words">{column}</span></dt><dd className="font-medium tabular-nums">{formatMetricValue(item.value, column, valueFormat)}</dd></div>;
       })}</dl>
     </div>;
   }} />;
@@ -86,7 +89,7 @@ function MetricChartContent({ type, xColumn, yColumns, rows, valueFormat = "auto
         </PieChart>
       </ChartContainer>
       <div className="min-w-0 px-2"><p className="mb-3 text-xs font-medium">{first} · share of returned total</p><ul className="max-h-64 space-y-2 overflow-auto text-xs" aria-label="Category shares">
-        {items.map((item, index) => <li key={index} className="flex items-start gap-2"><span className="mt-1 size-2.5 shrink-0 rounded-sm" style={{ background: item.fill }} /><span className="min-w-0 flex-1 break-words">{item.name}</span><span className="text-right tabular-nums"><span className="block font-medium">{formatMetricValue(item.value, first, valueFormat)}</span><span className="text-muted-foreground">{item.value === null ? "Unknown share" : formatMetricValue(item.value / total * 100, "", "percent")}</span></span></li>)}
+        {items.map((item, index) => <li key={index} className="flex items-start gap-2"><span className="mt-1 size-2.5 shrink-0 rounded-sm" style={{ background: item.fill }} /><span className="min-w-0 flex-1 break-words">{item.name}</span><span className="shrink-0 text-right font-medium tabular-nums">{item.value === null ? "Unknown share" : formatMetricValue(item.value / total * 100, "", "percent")}</span></li>)}
       </ul></div>
     </div>;
   }
@@ -98,7 +101,7 @@ function MetricChartContent({ type, xColumn, yColumns, rows, valueFormat = "auto
     tooltip,
   ];
   const axis = (column: string) => mixed && isPercentColumn(column, valueFormat) ? "percent" : "number";
-  const chartProps = { data: horizontal ? data.slice(0, 15) : data, accessibilityLayer: true, margin: { top: 10, right: 12, left: 0, bottom: 8 } };
+  const chartProps = { data: horizontal ? data.slice(0, categoryLimit) : data, accessibilityLayer: true, margin: { top: 10, right: 12, left: 0, bottom: 8 } };
   return <div className="min-w-0">
     {mixed && <p className="mb-2 px-2 text-xs text-muted-foreground">Counts use the left axis. Percentages use the right axis.</p>}
     <ChartContainer config={config} className="min-w-0 w-full" style={{ height }}>
@@ -107,6 +110,10 @@ function MetricChartContent({ type, xColumn, yColumns, rows, valueFormat = "auto
           : <BarChart {...chartProps} layout={horizontal ? "vertical" : "horizontal"}>{axes}{yColumns.map((column, index) => <Bar key={column} yAxisId={axis(column)} dataKey={`series${index}`} name={column} fill={COLORS[index % COLORS.length]} radius={horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]} isAnimationActive={false} />)}</BarChart>}
     </ChartContainer>
     {legend}
-    {horizontal && data.length > 15 && <p className="mt-2 text-center text-xs text-muted-foreground">First 15 categories shown. The table contains all returned rows.</p>}
+    {horizontal && data.length > 6 && <div className="mt-2 flex flex-wrap items-center justify-center gap-x-2 text-xs text-muted-foreground">
+      <span>{Math.min(categoryLimit, data.length)} of {data.length} categories</span>
+      <Button size="sm" variant="ghost" onClick={() => setExpanded(value => !value)}>{expanded ? "Show fewer categories" : data.length <= 15 ? `Show all ${data.length} categories` : "Show 15 categories"}</Button>
+      {expanded && data.length > 15 && <span>Open the table for all returned rows.</span>}
+    </div>}
   </div>;
 }

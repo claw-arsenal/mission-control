@@ -32,7 +32,7 @@ export function useMetricVisibility(metrics: { id: string }[] | null) {
     catch { /* Keep the current selection usable when browser storage is unavailable. */ }
   }, [preferences, ready]);
 
-  const selectedIds = new Set(preferences.selectedIds ?? (metrics ?? []).slice(0, 6).map(metric => metric.id));
+  const selectedIds = new Set(preferences.selectedIds ?? (metrics ?? []).slice(0, 4).map(metric => metric.id));
   const setMode = (mode: Preferences["mode"]) => setPreferences(current => ({ ...current, mode }));
   const select = (ids: string[]) => setPreferences({ mode: "focused", selectedIds: ids });
   const toggle = (id: string) => {
