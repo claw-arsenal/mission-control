@@ -82,13 +82,16 @@ export function reviewResource(url: string, deps: Deps = { fetch: (...args) => f
     try {
       const { rows, total, asOf } = await fetchPage(`offset=0&limit=${DELTA_LIMIT}&fetchedSince=${encodeURIComponent(state.asOf)}`, controller.signal);
       if (controller.signal.aborted || deltaRequest !== controller) return;
-      const known = byId(state.reviews);
-      const updated = rows.filter((row) => known.has(row.id));
-      const fresh = rows.filter((row) => !known.has(row.id));
-      const merged = byId(state.pending);
-      for (const row of fresh) merged.set(row.id, row);
-      const reviews = updated.length ? state.reviews.map((row) => known.get(row.id) && rows.find((r) => r.id === row.id) ? rows.find((r) => r.id === row.id)! : row) : state.reviews;
-      update({ reviews, pending: [...merged.values()], asOf, total: Math.max(total, state.total) });
+      // A row already on screen updates in place; anything else waits in
+      // `pending` so the reader's position and loaded pages are undisturbed.
+      const changed = byId(rows);
+      const onScreen = new Set(state.reviews.map((row) => row.id));
+      const reviews = rows.some((row) => onScreen.has(row.id))
+        ? state.reviews.map((row) => changed.get(row.id) ?? row)
+        : state.reviews;
+      const pending = byId(state.pending);
+      for (const row of rows) if (!onScreen.has(row.id)) pending.set(row.id, row);
+      update({ reviews, pending: [...pending.values()], asOf, total: Math.max(total, state.total) });
     } catch {
       /* A failed delta is recovered by the next change or a manual reload. */
     } finally {

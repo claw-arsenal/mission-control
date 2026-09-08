@@ -72,6 +72,15 @@ describe("hydration and persistence", () => {
     expect(last.apps.A1.reports?.installs).toHaveLength(1);
     expect(last.apps.A1.reports?.breakdowns).toEqual([]);
     expect(last.apps.A1.reports?.files).toEqual([]);
+    // The series is stored once, not under both `reports` and `core.reports`.
+    expect(last.apps.A1.core.reports.installs).toEqual([]);
+
+    // Round trip: a new store built from that snapshot serves the series again.
+    const revived = harness({ saved: last });
+    const entry = revived.store.snapshot().apps.A1;
+    expect(entry.core?.reports.installs).toHaveLength(1);
+    expect(entry.reports?.installs).toHaveLength(1);
+    expect(entry.loading).toBe(false);
   });
 
   it("persist() ignores apps without a core payload", () => {

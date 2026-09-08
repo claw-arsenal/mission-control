@@ -500,8 +500,10 @@ export function persist(state: Snapshot, savedAt: string): PersistedSnapshot {
   const apps: PersistedSnapshot["apps"] = {};
   for (const [id, app] of Object.entries(state.apps)) {
     if (!app.core) continue;
+    // The series is stored once, under `reports`; hydrate merges it back into
+    // `core`. Breakdowns and the file index are not worth the quota.
     const reports = app.reports ? { ...app.reports, breakdowns: [], files: [] } : null;
-    apps[id] = { core: { ...app.core, reports: reports ?? emptyReports() }, reports, loadedAt: app.loadedAt, reportsLoadedAt: app.reportsLoadedAt };
+    apps[id] = { core: { ...app.core, reports: emptyReports() }, reports, loadedAt: app.loadedAt, reportsLoadedAt: app.reportsLoadedAt };
   }
   return { version: 1, savedAt, list: state.list.loadedAt ? { apps: state.list.apps, loadedAt: state.list.loadedAt, negativeThreshold: state.list.negativeThreshold } : null, apps };
 }
