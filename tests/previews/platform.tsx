@@ -11,5 +11,12 @@ const router = { replace: apply, push: apply };
 export const useRouter = () => router;
 export const usePathname = () => "/mobile-apps/fixture";
 export const useSearchParams = () => useSyncExternalStore(subscribe, () => search, () => search);
-export const useModules = () => ({ ready: true, isEnabled: () => true });
-export default function Link(props: ComponentProps<"a">) { return <a {...props} />; }
+// Module-level constant: returning a fresh object per render pushes consumer
+// dependency arrays into an update loop and blanks the fixture page.
+const modules = { ready: true, isEnabled: () => true };
+export const useModules = () => modules;
+// Next-only props must not reach the DOM, or React logs an attribute warning.
+export default function Link({ prefetch, replace, scroll, shallow, ...props }: ComponentProps<"a"> & Record<string, unknown>) {
+  void prefetch; void replace; void scroll; void shallow;
+  return <a {...props} />;
+}

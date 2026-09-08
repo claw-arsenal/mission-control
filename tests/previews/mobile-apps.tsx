@@ -10,6 +10,8 @@ import "@/app/globals.css";
 let unavailable = false;
 let reportStatus = "fresh";
 let reviewCount = 34;
+const BASE_REVIEWS = 34;
+let publishedAt = new Date().toISOString();
 
 /** Stand-in EventSource so the fixture can publish typed change events. */
 class Events extends EventTarget {
@@ -52,7 +54,7 @@ const makeReviews = (count: number) =>
       : "The dashboard sometimes takes a long time to load on a slow connection.",
     app_version: "2.4.1", country: "nl", submitted_at: "2026-09-05T10:00:00Z",
     store_response: i % 5 ? null : "Thanks for the report, this is fixed in 2.4.2.",
-    fetched_at: new Date(Date.now() - (count - i) * 60_000).toISOString(),
+    fetched_at: i >= BASE_REVIEWS ? publishedAt : new Date(Date.now() - (count - i) * 60_000).toISOString(),
   }));
 
 const trend = Array.from({ length: 21 }, (_, i) => ({
@@ -165,7 +167,7 @@ function Preview() {
           setOffline(next);
           if (next) dropConnection(); else Events.all.forEach((e) => e.dispatchEvent(new Event("open")));
         }}>{offline ? "Restore connection" : "Simulate connection failure"}</button>
-        <button className={button} onClick={() => { reviewCount += 3; publish({ kind: "reviews", appId: "fixture", inserted: 3 }); }}>Publish 3 new reviews</button>
+        <button className={button} onClick={() => { reviewCount += 3; publishedAt = new Date().toISOString(); publish({ kind: "reviews", appId: "fixture", inserted: 3 }); }}>Publish 3 new reviews</button>
         <button className={button} onClick={() => publish({ kind: "reports", appId: "fixture", listingId: "google", store: "google" })}>Publish a report change</button>
         <button className={button} onClick={() => setView(view === "editor" ? "detail" : "editor")}>{view === "editor" ? "Dashboard" : "Document editor"}</button>
       </nav>

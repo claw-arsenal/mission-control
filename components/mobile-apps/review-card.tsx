@@ -134,7 +134,9 @@ export const ReviewCard = memo(forwardRef<HTMLElement, Props>(function ReviewCar
         highlight && "bg-info-soft",
       )}
     >
-      <div className="flex items-center gap-2.5">
+      {/* Stars, badges and date share a line; the title joins them only when
+          there is room, so a narrow screen never crushes it into a column. */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
         <Stars n={review.rating} />
         {isNew ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-info-soft px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wide text-info-fg">
@@ -144,14 +146,14 @@ export const ReviewCard = memo(forwardRef<HTMLElement, Props>(function ReviewCar
         {needsReply ? (
           <span className="rounded-full bg-warning-soft px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wide text-warning-fg">Needs reply</span>
         ) : null}
-        {review.title ? (
-          <h3 className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight">{review.title}</h3>
-        ) : (
-          <span className="min-w-0 flex-1" />
-        )}
-        <time className="shrink-0 text-xs text-muted-foreground" dateTime={review.submitted_at ?? undefined}>
+        <time className="ml-auto shrink-0 text-xs text-muted-foreground sm:order-last" dateTime={review.submitted_at ?? undefined}>
           {formatDate(review.submitted_at)}
         </time>
+        {review.title ? (
+          <h3 className="order-last min-w-0 basis-full text-sm font-semibold tracking-tight sm:order-none sm:basis-auto sm:flex-1 sm:truncate">
+            {review.title}
+          </h3>
+        ) : null}
       </div>
 
       {shownBody ? (
@@ -160,7 +162,14 @@ export const ReviewCard = memo(forwardRef<HTMLElement, Props>(function ReviewCar
         </p>
       ) : null}
 
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-1">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <StoreIcon className="size-3.5 shrink-0" aria-hidden />
+        <span className="sr-only">{review.store === "apple" ? "App Store" : "Google Play"}</span>
+        {review.author ? <span className="truncate font-medium text-foreground/70">{review.author}</span> : null}
+        {review.app_version ? <span>v{review.app_version}</span> : null}
+        {review.country ? <span>{countryName(review.country)}</span> : null}
+
+        <span className="ml-auto flex flex-wrap items-center gap-x-1 gap-y-1">
         {long ? (
           <button type="button" onClick={() => setExpanded((v) => !v)} className="inline-flex h-8 items-center rounded-md px-1.5 text-xs font-medium text-primary transition-colors hover:bg-surface-hover">
             {expanded ? "Show less" : "Read more"}
@@ -194,14 +203,7 @@ export const ReviewCard = memo(forwardRef<HTMLElement, Props>(function ReviewCar
             View in store
           </a>
         ) : null}
-      </div>
-
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <StoreIcon className="size-3.5" aria-hidden />
-        <span className="sr-only">{review.store === "apple" ? "App Store" : "Google Play"}</span>
-        {review.author ? <span className="font-medium text-foreground/70">{review.author}</span> : null}
-        {review.app_version ? <span>v{review.app_version}</span> : null}
-        {review.country ? <span title={countryName(review.country)}>{countryName(review.country)}</span> : null}
+        </span>
       </div>
 
       {review.store_response ? (

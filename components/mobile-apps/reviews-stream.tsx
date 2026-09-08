@@ -102,7 +102,7 @@ export function ReviewsStream({ appId, store, refreshKey, storeAppIds = {}, nega
   useEffect(() => { if (filters.q !== search.trim()) { setSearch(filters.q); setDebounced(filters.q); } }, [filters.q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const query = buildReviewsQuery(store, filters, negativeThreshold, debounced);
-  const { reviews, total, loading, loadingMore, error, hasMore, pending, asOf, loadMore, retry, showPending } =
+  const { reviews, total, loading, loadingMore, error, hasMore, pending, asOf, loadMore, retry, reload, showPending } =
     useMobileAppReviews(`/api/mobile-apps/${appId}/reviews?${query}`, refreshKey);
 
   const lastSeen = useLastSeen(appId, asOf);
@@ -115,14 +115,21 @@ export function ReviewsStream({ appId, store, refreshKey, storeAppIds = {}, nega
   const newCount = pending.length > 0 ? pending.length : announcedNew;
 
   const acceptPending = useCallback(() => {
-    if (pending.length === 0) { onNewShown?.(); return; }
+    // The stream may have announced a count before the rows were fetched. Reload
+    // the first page in that case rather than leaving a control that does nothing.
+    if (pending.length === 0) {
+      void reload();
+      onNewShown?.();
+      onAnnounce?.("Reviews reloaded");
+      return;
+    }
     setHighlighted(new Set(pending.map((r) => r.id)));
     showPending();
     onNewShown?.();
     onAnnounce?.(`${pending.length} new ${pending.length === 1 ? "review" : "reviews"} shown`);
     listRef.current?.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
     setTimeout(() => setHighlighted(new Set()), 4000);
-  }, [pending, showPending, onNewShown, onAnnounce, reduceMotion]);
+  }, [pending, showPending, reload, onNewShown, onAnnounce, reduceMotion]);
 
   // Infinite loading, with the button kept as the keyboard/no-observer fallback.
   useEffect(() => {
@@ -253,7 +260,7 @@ export function ReviewsStream({ appId, store, refreshKey, storeAppIds = {}, nega
           >
             <Button size="sm" onClick={acceptPending} className="rounded-full shadow-elev-2">
               <IconArrowUp className="size-3.5" aria-hidden />
-              {pending.length > 0 ? `Show ${pending.length} new ${pending.length === 1 ? "review" : "reviews"}` : `${announcedNew} new · checking`}
+              {`Show ${newCount} new ${newCount === 1 ? "review" : "reviews"}`}
               <kbd className="ml-1 hidden rounded bg-primary-foreground/20 px-1 text-2xs font-normal sm:inline">n</kbd>
             </Button>
           </motion.div>
