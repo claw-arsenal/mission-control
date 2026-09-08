@@ -16,7 +16,7 @@ import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
 import { getSql } from "@/lib/local-db";
 import { syncApp } from "@/lib/mobile-apps/sync";
-import { checkOfficialReportFreshness } from "@/lib/mobile-apps/report-freshness";
+import { checkOfficialReportFreshness, readStoredFreshness } from "@/lib/mobile-apps/report-freshness";
 import { enqueueReportSyncJob } from "@/lib/mobile-apps/report-jobs";
 import { POST } from "@/app/api/mobile-apps/[id]/ensure-fresh/route";
 
@@ -50,6 +50,7 @@ beforeEach(() => {
   vi.mocked(getSession).mockResolvedValue({ sub: "s", name: "n", email: "u@example.com" });
   vi.mocked(isModuleEnabled).mockResolvedValue(true);
   vi.mocked(getSql).mockReturnValue(fakeSql() as never);
+  vi.mocked(readStoredFreshness).mockResolvedValue([]);
   vi.mocked(enqueueReportSyncJob).mockResolvedValue({ job: { id: "job-1", status: "queued", mode: "incremental", store: "google", mobileAppId: APP, listingId: null }, reused: false });
 });
 afterEach(() => vi.clearAllMocks());
@@ -70,12 +71,48 @@ describe("POST /api/mobile-apps/[id]/ensure-fresh", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ fresh: false, liveFresh: false });
   });
-  it("always runs a LIGHT sync (never heavy report flags)", async () => {
+  it("runs a LIGHT sync that respects the dedupe window by default (never heavy report flags)", async () => {
     vi.mocked(checkOfficialReportFreshness).mockResolvedValue(fresh as never);
     await POST(req({ consistency: "available" }), { params });
     expect(syncApp).toHaveBeenCalledTimes(1);
     const opts = (vi.mocked(syncApp).mock.calls[0] as unknown[])[1] as Record<string, unknown>;
-    expect(opts).toMatchObject({ force: true, syncReports: false, syncAppleStorefronts: false });
+    expect(opts).toMatchObject({ force: false, syncReports: false, syncAppleStorefronts: false });
+  });
+
+  it("forces the live store call only when asked", async () => {
+    vi.mocked(checkOfficialReportFreshness).mockResolvedValue(fresh as never);
+    await POST(req({ force: true }), { params });
+    const opts = (vi.mocked(syncApp).mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    expect(opts).toMatchObject({ force: true });
+  });
+
+  it("reuses a recent settled stored verdict instead of listing GCS on every page open", async () => {
+    vi.mocked(readStoredFreshness).mockResolvedValue([
+      { listingId: "L1", status: "fresh", latestOfficialYyyyMm: "202609", latestProcessedYyyyMm: "202609", checkedAt: new Date().toISOString(), processedAt: null, activeJobId: null, errorMessage: null },
+    ]);
+    const res = await POST(req({}), { params });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ reportsFresh: true, freshness: { googleReports: { status: "fresh" } } });
+    expect(checkOfficialReportFreshness).not.toHaveBeenCalled();
+  });
+
+  it.each(["stale", "unknown"] as const)("re-checks GCS when the stored verdict is %s, or too old, or force is set", async (status) => {
+    vi.mocked(readStoredFreshness).mockResolvedValue([
+      { listingId: "L1", status, latestOfficialYyyyMm: null, latestProcessedYyyyMm: null, checkedAt: new Date().toISOString(), processedAt: null, activeJobId: null, errorMessage: null },
+    ]);
+    vi.mocked(checkOfficialReportFreshness).mockResolvedValue(fresh as never);
+    await POST(req({}), { params });
+    expect(checkOfficialReportFreshness).toHaveBeenCalledTimes(1);
+    vi.mocked(readStoredFreshness).mockResolvedValue([
+      { listingId: "L1", status: "fresh", latestOfficialYyyyMm: null, latestProcessedYyyyMm: null, checkedAt: new Date(Date.now() - 3_600_000).toISOString(), processedAt: null, activeJobId: null, errorMessage: null },
+    ]);
+    await POST(req({}), { params });
+    expect(checkOfficialReportFreshness).toHaveBeenCalledTimes(2);
+    vi.mocked(readStoredFreshness).mockResolvedValue([
+      { listingId: "L1", status: "fresh", latestOfficialYyyyMm: null, latestProcessedYyyyMm: null, checkedAt: new Date().toISOString(), processedAt: null, activeJobId: null, errorMessage: null },
+    ]);
+    await POST(req({ force: true }), { params });
+    expect(checkOfficialReportFreshness).toHaveBeenCalledTimes(3);
   });
 
   it("strict + stale → 202 refreshing, enqueues a worker, returns jobId, no stale charts", async () => {

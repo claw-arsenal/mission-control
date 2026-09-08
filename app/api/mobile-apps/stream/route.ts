@@ -1,9 +1,16 @@
 import { getSql } from "@/lib/local-db";
 import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
+import { CHANGE_CHANNEL, coalesceChanges, parseChange, type MobileAppsChange } from "@/lib/mobile-apps/change-events";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/** How long a burst of notifications is held before one coalesced flush. */
+const FLUSH_WINDOW_MS = 500;
+/** Browser reconnect delay after a dropped connection. */
+const RETRY_MS = 3000;
+const HEARTBEAT_MS = 25_000;
 
 export async function GET(request: Request): Promise<Response> {
   // Same gate as every other mobile-apps route: no unauthenticated stream, and no
@@ -23,7 +30,8 @@ export async function GET(request: Request): Promise<Response> {
       let closed = false;
       let cleanupStarted = false;
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
-      const pending = new Set<string>();
+      let eventId = 0;
+      const pending: MobileAppsChange[] = [];
 
       const cleanup = () => {
         if (cleanupStarted) return;
@@ -40,42 +48,47 @@ export async function GET(request: Request): Promise<Response> {
         }
       };
 
-      const send = (event: string, data: string) => {
+      const write = (frame: string) => {
         if (closed) return;
         try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+          controller.enqueue(encoder.encode(frame));
         } catch {
           cleanup();
         }
       };
+      const send = (event: string, data: string, withId = false) =>
+        write(`${withId ? `id: ${++eventId}\n` : ""}event: ${event}\ndata: ${data}\n\n`);
 
-      // Heartbeat every 25s
-      const heartbeat = setInterval(() => send("ping", "keepalive"), 25_000);
+      const heartbeat = setInterval(() => send("ping", "keepalive"), HEARTBEAT_MS);
 
       let unlistenMobileApps: (() => Promise<void>) | null = null;
 
       signal.addEventListener("abort", cleanup, { once: true });
       if (signal.aborted) { cleanup(); return; }
 
-      // Send initial connected event
-      send("connected", JSON.stringify({ ts: Date.now() }));
+      // First frame: reconnect policy + server clock so clients can set watermarks.
+      write(`retry: ${RETRY_MS}\n`);
+      send("hello", JSON.stringify({ serverTime: new Date().toISOString() }));
 
-      // Listen for mobile app sync changes
+      const flush = () => {
+        flushTimer = null;
+        const batch = coalesceChanges(pending.splice(0, pending.length));
+        for (const change of batch) send("change", JSON.stringify(change), true);
+      };
+
       try {
-        const meta = await sql.listen("mobile_apps_change", (payload: string) => {
+        const meta = await sql.listen(CHANGE_CHANNEL, (payload: string) => {
           if (closed) return;
-          pending.add(String(payload || "{}"));
-          // A bulk import commits many rows. Bound browser refreshes while retaining app scope.
-          if (!flushTimer) flushTimer = setTimeout(() => {
-            flushTimer = null;
-            for (const payload of pending) send("change", payload);
-            pending.clear();
-          }, 500);
+          const change = parseChange(String(payload || ""));
+          if (!change) return;
+          pending.push(change);
+          // A bulk import commits many rows; bound browser work to one flush per window.
+          if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_WINDOW_MS);
         });
         unlistenMobileApps = () => meta.unlisten();
         if (closed) await meta.unlisten();
       } catch {
-        /* graceful degradation */
+        /* graceful degradation: the client falls back to revalidation on focus/online */
       }
     },
   });

@@ -75,6 +75,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const { id } = await params;
     if (!isUuid(id)) return fail("App not found", 404);
     const { searchParams } = new URL(request.url);
+    // Slices: `core` is app/listings/summary/trend/sync runs/freshness; `reports`
+    // is the Play Console series, breakdowns and file index. Clients reacting to a
+    // review change ask for `core` only so a new review never reloads reports.
+    const include = new Set((searchParams.get("include") ?? "core,reports").split(",").map(s => s.trim()).filter(Boolean));
+    const includeReports = include.has("reports");
+    const includeCore = include.has("core") || !includeReports;
+    const asOf = new Date().toISOString();
     const sql = getSql();
     await ensureMobileAppsSchema(sql);
     const wid = await workspaceId(sql);
@@ -130,7 +137,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
     // Review-based daily average rating per store (clean trend, no snapshot noise).
     const trend =
-      listingIds.length === 0
+      listingIds.length === 0 || !includeCore
         ? []
         : await sql`
             select
@@ -148,7 +155,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
     // Latest sync run per listing → "last sync status/error per store".
     const syncRuns =
-      listingIds.length === 0
+      listingIds.length === 0 || !includeCore
         ? []
         : await sql`
             select distinct on (run.listing_id)
@@ -163,7 +170,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // page returned above). Negative threshold comes from secrets.env config.
     const negativeThreshold = loadMobileReviewsConfig().sync.negativeThreshold;
     const summary =
-      listingIds.length === 0
+      listingIds.length === 0 || !includeCore
         ? []
         : await sql`
             select
@@ -189,7 +196,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // with dimensions, while Apple uses storefront lookup/reviews APIs.
     const reports: Record<string, Array<Record<string, unknown>>> = {};
     const googleListingIds = listings.filter((l) => l.store === "google").map((l) => l.id);
-    if (googleListingIds.length > 0) {
+    if (googleListingIds.length > 0 && includeReports) {
       // Charts read ONLY from the worker-built daily rollups, never from raw
       // mobile_app_report_metrics. This keeps the request bounded (no unbounded
       // row scan, no Node-side summation) and correct (installs/crashes come from
@@ -332,12 +339,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
           summary,
           negativeThreshold,
           freshness,
+          asOf,
         },
         { status: strict.httpStatus },
       );
     }
 
-    return ok({ app: appRows[0], listings, trend, syncRuns, summary, negativeThreshold, reports, reportsFresh, freshness });
+    return ok({
+      app: appRows[0], listings, trend, syncRuns, summary, negativeThreshold,
+      ...(includeReports ? { reports } : {}),
+      reportsFresh, freshness, asOf, include: [...include],
+    });
   } catch (error) {
     return fail(error instanceof Error ? error.message : "Failed to load app", 500);
   }

@@ -73,7 +73,8 @@ describe("report job lifecycle regressions", () => {
     let terminalAtFreshness = false;
     deps.updateFreshness = async () => {
       terminalAtFreshness = calls.some(c => /finished_at/.test(c.q) && c.values[0] === "success");
-      expect(calls.some(c => /pg_notify/.test(c.q))).toBe(false);
+      // Job status may stream, but no data change may be announced before the terminal write.
+      expect(calls.some(c => /pg_notify/.test(c.q) && /"kind":"(reports|reviews|listing)"/.test(String(c.values[0])))).toBe(false);
     };
     await processQueuedJobs(fn, deps);
     expect(terminalAtFreshness).toBe(true);
@@ -161,8 +162,13 @@ describe("processQueuedJobs orchestration", () => {
     // Job finished success.
     const finish = calls.find((c) => /update mobile_app_report_sync_jobs/i.test(c.q) && c.values.includes("success"));
     expect(finish, "a success finish update was issued").toBeTruthy();
-    // UI notified.
-    expect(calls.some((c) => /pg_notify\('mobile_apps_change'/i.test(c.q))).toBe(true);
+    // UI notified with typed changes: job running, job terminal, reports per Google listing.
+    const published = calls.filter((c) => /pg_notify\('mobile_apps_change'/i.test(c.q)).map((c) => JSON.parse(String(c.values[0])));
+    expect(published).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "job", jobId: "j1", jobStatus: "running" }),
+      expect.objectContaining({ kind: "job", jobId: "j1", jobStatus: "success" }),
+      expect.objectContaining({ kind: "reports", appId: "A1", listingId: "L1" }),
+    ]));
   });
 
   it("backfill jobs re-ingest the FULL history: refreshReports + allReportMonths on", async () => {

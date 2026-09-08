@@ -3,6 +3,7 @@ import { syncApp } from "@/lib/mobile-apps/sync";
 import { refreshReportRollups } from "@/lib/mobile-apps/report-rollups";
 import { enqueueReportSyncJob, reapStaleReportJobs, type EnqueueReportSyncInput } from "@/lib/mobile-apps/report-jobs";
 import { checkOfficialReportFreshness } from "@/lib/mobile-apps/report-freshness";
+import { publishChange } from "@/lib/mobile-apps/change-events";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -130,7 +131,8 @@ export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDe
     let failures = 0;
     let successes = 0;
     let partials = 0;
-    const googleListingIds = new Set<string>();
+    // Google listing id -> owning app id, so per-listing report changes can name their app.
+    const googleListings = new Map<string, string>();
     const rollupFailures = new Map<string, string>();
 
     try {
@@ -158,7 +160,7 @@ export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDe
             } else if (r.reportsStatus === "partial") partials++;
             else if (r.status !== "skipped") successes++;
             if (Array.isArray(r.reportWarnings)) warnings.push(...r.reportWarnings);
-            if (r.store === "google" && r.listingId) googleListingIds.add(r.listingId);
+            if (r.store === "google" && r.listingId) googleListings.set(r.listingId, appId);
           }
         } catch (error) {
           failures++;
@@ -170,7 +172,7 @@ export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDe
       errors.push(error instanceof Error ? error.message : String(error));
     }
 
-    for (const listingId of googleListingIds) {
+    for (const listingId of googleListings.keys()) {
       await heartbeatJob(sql, job.id);
       try {
         await deps.refreshReportRollups(sql, listingId);
@@ -183,7 +185,7 @@ export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDe
 
     stats.fetched = fetched;
     stats.inserted = inserted;
-    stats.googleListings = googleListingIds.size;
+    stats.googleListings = googleListings.size;
     stats.rollupFailedListings = [...rollupFailures.keys()];
 
     const status: JobOutcome["status"] = failures > 0 && successes + partials === 0
@@ -201,7 +203,8 @@ export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDe
           error_message = ${outcome.error ?? null}, updated_at = now()
       where active_job_id = ${job.id}::uuid
     `;
-    for (const listingId of googleListingIds) {
+    await publishChange(sql, { kind: "job", appId: job.mobileAppId, jobId: job.id, jobStatus: status });
+    for (const [listingId, appId] of googleListings) {
       try {
         const rollupError = rollupFailures.get(listingId);
         if (rollupError) throw new Error(rollupError);
@@ -215,16 +218,13 @@ export async function runReportSyncJob(sql: Sql, job: ClaimedJob, deps: WorkerDe
             error_message = excluded.error_message, checked_at = now(), updated_at = now()
         `;
       }
+      await publishChange(sql, { kind: "reports", appId, listingId, store: "google", jobId: job.id, jobStatus: status });
     }
-    await notifyChange(sql, job.mobileAppId);
+    if (googleListings.size === 0) await publishChange(sql, { kind: "reports", appId: job.mobileAppId, jobId: job.id, jobStatus: status });
     return outcome;
   } finally {
     clearInterval(beat);
   }
-}
-
-async function notifyChange(sql: Sql, appId: string | null): Promise<void> {
-  await sql`select pg_notify('mobile_apps_change', ${JSON.stringify({ appId })})`.catch(() => null);
 }
 
 /**
@@ -241,6 +241,7 @@ export async function processQueuedJobs(
     // Waiting work must stay queued: only the current job has a heartbeat.
     const [job] = await claimQueuedJobs(sql, 1);
     if (!job) break;
+    await publishChange(sql, { kind: "job", appId: job.mobileAppId, jobId: job.id, jobStatus: "running" });
     await runReportSyncJob(sql, job, deps);
     jobIds.push(job.id);
   }

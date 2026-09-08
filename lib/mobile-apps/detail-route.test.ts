@@ -62,6 +62,30 @@ describe("GET /api/mobile-apps/[id] freshness contract", () => {
     expect(checkOfficialReportFreshness).not.toHaveBeenCalled();
   });
 
+  it("include=core skips the report reads and omits reports, keeping freshness and asOf", async () => {
+    const { readReportRollups, readLatestBreakdowns } = await import("@/lib/mobile-apps/report-rollups");
+    vi.mocked(readStoredFreshness).mockResolvedValue([
+      { listingId: "L1", status: "stale", latestOfficialYyyyMm: "202606", latestProcessedYyyyMm: "202605", checkedAt: "x", processedAt: "y", activeJobId: null, errorMessage: null },
+    ]);
+    const res = await GET(req("?include=core"), { params });
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.reports).toBeUndefined();
+    expect(json.freshness.googleReports.status).toBe("stale");
+    expect(typeof json.asOf).toBe("string");
+    expect(json.include).toEqual(["core"]);
+    expect(readReportRollups).not.toHaveBeenCalled();
+    expect(readLatestBreakdowns).not.toHaveBeenCalled();
+  });
+
+  it("include=reports reads the report slices", async () => {
+    const { readReportRollups } = await import("@/lib/mobile-apps/report-rollups");
+    const res = await GET(req("?include=reports"), { params });
+    const json = await res.json();
+    expect(json.reports).toBeDefined();
+    expect(readReportRollups).toHaveBeenCalledTimes(1);
+  });
+
   it("strict + stale: 202 refreshing, omits report charts, enqueues worker", async () => {
     vi.mocked(checkOfficialReportFreshness).mockResolvedValue(result("stale", true) as never);
     const res = await GET(req("?consistency=strict"), { params });

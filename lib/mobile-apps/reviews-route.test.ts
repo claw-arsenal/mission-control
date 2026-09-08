@@ -8,7 +8,7 @@ vi.mock("@/lib/local-db", () => ({ getSql: vi.fn() }));
 import { getSession } from "@/lib/auth/session";
 import { isModuleEnabled } from "@/lib/modules/state";
 import { getSql } from "@/lib/local-db";
-import { GET } from "@/app/api/mobile-apps/[id]/reviews/route";
+import { GET, reviewsToCsv } from "@/app/api/mobile-apps/[id]/reviews/route";
 
 const session = vi.mocked(getSession);
 const moduleEnabled = vi.mocked(isModuleEnabled);
@@ -72,6 +72,42 @@ describe("reviews route", () => {
     vi.mocked(getSql).mockReturnValue(fakeSql() as never);
     const res = await GET(req("?since=notadate"), { params });
     expect(res.status).toBe(422);
+  });
+
+  it("accepts fetchedSince and responded filters and stamps asOf", async () => {
+    session.mockResolvedValue({ sub: "s", name: "n", email: "u@example.com" });
+    moduleEnabled.mockResolvedValue(true);
+    vi.mocked(getSql).mockReturnValue(fakeSql() as never);
+    const res = await GET(req("?fetchedSince=2026-09-08T10:00:00.000Z&responded=false"), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(typeof json.asOf).toBe("string");
+    expect(json.reviews).toHaveLength(30);
+  });
+
+  it("rejects an invalid responded value (422)", async () => {
+    session.mockResolvedValue({ sub: "s", name: "n", email: "u@example.com" });
+    moduleEnabled.mockResolvedValue(true);
+    vi.mocked(getSql).mockReturnValue(fakeSql() as never);
+    expect((await GET(req("?responded=maybe"), { params })).status).toBe(422);
+  });
+
+  it("exports the filtered feed as a CSV attachment", async () => {
+    session.mockResolvedValue({ sub: "s", name: "n", email: "u@example.com" });
+    moduleEnabled.mockResolvedValue(true);
+    vi.mocked(getSql).mockReturnValue(fakeSql() as never);
+    const res = await GET(req("?format=csv&rating=1"), { params });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain("attachment");
+    const text = await res.text();
+    expect(text.split("\r\n")[0]).toBe("id,store,submitted_at,rating,title,body,author,app_version,country,language,store_response,fetched_at");
+    expect(text.split("\r\n").filter(Boolean)).toHaveLength(31);
+  });
+
+  it("escapes quotes, commas and newlines in CSV cells", () => {
+    const csv = reviewsToCsv([{ id: "1", store: "google", title: 'He said "hi", then\nleft', body: null }]);
+    expect(csv).toContain('"He said ""hi"", then\nleft"');
   });
 
   it("paginates: returns a page plus total/hasMore/nextOffset", async () => {

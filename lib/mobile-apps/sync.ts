@@ -30,6 +30,7 @@ import { toAlpha2 } from "@/lib/mobile-apps/country-codes";
 import { ensureMobileAppsSchema } from "@/lib/mobile-apps/ensure-schema";
 import { ratingSourceCopy, type RatingSource } from "@/lib/mobile-apps/rating-source";
 import type { RawReview, Store } from "@/lib/mobile-apps/types";
+import { publishChange } from "@/lib/mobile-apps/change-events";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -357,6 +358,7 @@ async function syncListing(
   sql: Sql,
   listing: ListingRow,
   opts: {
+    appId: string;
     force: boolean;
     dedupeMs: number;
     refreshReports: boolean;
@@ -510,6 +512,9 @@ async function syncListing(
           last_synced_at = now()
       where id = ${listing.id}
     `;
+    // Typed change events: the listing row changed, and reviews arrived if any.
+    await publishChange(sql, { kind: "listing", appId: opts.appId, listingId: listing.id, store });
+    if (inserted > 0) await publishChange(sql, { kind: "reviews", appId: opts.appId, listingId: listing.id, store, inserted });
 
     // Google Play Console bulk reports: list/download ALL available year/month CSVs.
     // Page/tab syncs pass syncReports=false so heavy all-year CSV scans do not block the UI.
@@ -566,6 +571,8 @@ async function syncListing(
       // reviewCsvStats keeps its precise type, so the review counts are typed.
       fetchedReviewCount += reviewCsvStats.reviewsParsed;
       inserted += reviewCsvStats.reviewsInserted;
+      if (reviewCsvStats.reviewsInserted > 0)
+        await publishChange(sql, { kind: "reviews", appId: opts.appId, listingId: listing.id, store, inserted: reviewCsvStats.reviewsInserted });
     }
 
     const ratingCaptured = currentRating != null || officialRatings.length > 0;
@@ -676,11 +683,8 @@ export async function syncApp(
   const limit = pLimit(Math.max(1, opts.listingConcurrency ?? cfg.sync.concurrency));
   const results = await Promise.all(
     listings.map((l) =>
-      limit(() => syncListing(sql, l, { force, dedupeMs, refreshReports, syncReports, syncAppleStorefronts, allReportMonths })),
+      limit(() => syncListing(sql, l, { appId, force, dedupeMs, refreshReports, syncReports, syncAppleStorefronts, allReportMonths })),
     ),
   );
-
-  // Notify SSE listeners that this app changed.
-  await sql`select pg_notify('mobile_apps_change', ${JSON.stringify({ appId })})`.catch(() => null);
   return results;
 }

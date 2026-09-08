@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/local-db";
+import { publishChange } from "@/lib/mobile-apps/change-events";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -103,6 +104,7 @@ export async function enqueueReportSyncJob(sql: Sql, input: EnqueueReportSyncInp
                 mobile_app_id::text as "mobileAppId", listing_id::text as "listingId",
                 to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') as "createdAt"
     `) as unknown as ReportSyncJob[];
+    await publishChange(sql, { kind: "job", appId, listingId: listingId ?? undefined, store: store ?? undefined, jobId: inserted[0]!.id, jobStatus: "queued" });
     return { job: inserted[0]!, reused: false };
   } catch (err) {
     // Lost a race to a concurrent enqueue (the active-job partial unique index
