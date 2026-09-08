@@ -148,7 +148,7 @@ function StepIndicator({
             ].join(" ")}
           >
             <div className={[
-              "flex items-center justify-center size-6 rounded-full text-[10px] font-bold shrink-0",
+              "flex items-center justify-center size-6 rounded-full text-2xs font-bold shrink-0",
               isActive
                 ? "bg-primary-foreground/20 text-primary-foreground"
                 : isDone
@@ -158,7 +158,7 @@ function StepIndicator({
               {isDone ? <IconCheck className="size-3" /> : <Icon className="size-3.5" />}
             </div>
             <div className="flex flex-col items-start min-w-0">
-              <span className="text-[11px] font-semibold leading-tight truncate">{step.label}</span>
+              <span className="text-2xs font-semibold leading-tight truncate">{step.label}</span>
             </div>
           </button>
         );
@@ -367,7 +367,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
               ].join(" ")}
             >
               <span className="text-sm font-bold">{w.label}</span>
-              <span className="text-[10px] opacity-70">{w.desc}</span>
+              <span className="text-2xs opacity-70">{w.desc}</span>
             </button>
           ))}
         </div>
@@ -380,7 +380,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
       <div className="text-center mb-1">
         <h3 className="text-base font-bold text-foreground">Write your query</h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          A <code className="font-mono bg-muted px-1 py-0.5 rounded text-[11px]">SELECT</code> against your MySQL database
+          A <code className="font-mono bg-muted px-1 py-0.5 rounded text-2xs">SELECT</code> against your MySQL database
         </p>
       </div>
 
@@ -393,7 +393,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
           />
         </div>
         <div className="border-t px-3 py-2 flex items-center justify-between bg-muted/[0.04]">
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
             <IconBook2 className="size-3 shrink-0" />
             <span>
               <code className="font-mono text-foreground">:since</code>
@@ -420,12 +420,12 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
       )}
 
       {previewRowCount !== null && !error && (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 flex items-center gap-3">
-          <div className="flex items-center justify-center size-6 rounded-full bg-emerald-500/20 shrink-0">
-            <IconCheck className="size-3.5 text-emerald-600" />
+        <div className="rounded-lg border border-success/30 bg-success-soft px-4 py-3 flex items-center gap-3">
+          <div className="flex items-center justify-center size-6 rounded-full bg-success-soft shrink-0">
+            <IconCheck className="size-3.5 text-success-fg" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">Query works!</p>
+            <p className="text-sm font-semibold text-success-fg">Query works!</p>
             <p className="text-xs text-muted-foreground">
               {previewRowCount} rows · columns:{" "}
               <span className="font-mono">{previewColumns.map((c) => c.name).join(", ")}</span>
@@ -462,7 +462,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
             </span>
             <div className="min-w-0">
               <p className={cn("text-sm font-semibold", form.chartType === ct.key ? "text-primary" : "")}>{ct.label}</p>
-              <p className="text-[10px] text-muted-foreground truncate">{ct.desc}</p>
+              <p className="text-2xs text-muted-foreground truncate">{ct.desc}</p>
             </div>
           </button>
         ))}
@@ -540,7 +540,7 @@ export function MetricEditorModal({ open, initial, onClose, onSaved }: Props) {
       {previewRows.length > 0 && (
         <div className="rounded-xl border bg-muted/20 divide-y">
           <div className="px-4 py-2.5">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Preview</span>
+            <span className="text-2xs font-bold uppercase tracking-widest text-muted-foreground">Preview</span>
           </div>
           <div className="p-3">
             <MetricChart

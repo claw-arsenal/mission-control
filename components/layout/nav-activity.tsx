@@ -90,40 +90,38 @@ function agentLabel(agent: string): string {
 
 // ── Dot visuals ──────────────────────────────────────────────────────────────
 
-/** Returns inline style for the colored status dot. */
-function dotStyle(entry: ActivityEntry): React.CSSProperties {
-  // Agenda entries: use exact hex from status-colors
-  if (entry.type === "agenda") {
-    const normalized = normalizeAgendaEvent(entry.event);
-    if (statusMeta(normalized)) {
-      const hex = statusHex(normalized);
-      return { backgroundColor: hex, boxShadow: `0 0 5px ${hex}70` };
-    }
-  }
-  // Ticket / fallback: derive from level
-  const LEVEL_HEX: Record<string, string> = {
-    success: "#22c55e",
-    error:   "#ef4444",
-    warning: "#f59e0b",
-    info:    "#3b82f6",
-  };
-  const hex = LEVEL_HEX[entry.level] ?? "#9CA3AF";
-  return { backgroundColor: hex };
+/** Status vocabulary for the dot and label; agenda statuses keep their own palette. */
+const LEVEL_DOT: Record<string, string> = {
+  success: "bg-success",
+  error: "bg-danger",
+  warning: "bg-warning",
+  info: "bg-info",
+};
+const LEVEL_TEXT: Record<string, string> = {
+  success: "text-success-fg",
+  error: "text-danger-fg",
+  warning: "text-warning-fg",
+  info: "text-info-fg",
+};
+
+function agendaStatus(entry: ActivityEntry) {
+  if (entry.type !== "agenda") return null;
+  const normalized = normalizeAgendaEvent(entry.event);
+  return statusMeta(normalized) ? normalized : null;
 }
 
-/** Returns the CSS color for the event label text. */
-function labelColor(entry: ActivityEntry): string {
-  if (entry.type === "agenda") {
-    const normalized = normalizeAgendaEvent(entry.event);
-    if (statusMeta(normalized)) return statusText(normalized);
-  }
-  const LEVEL_TEXT: Record<string, string> = {
-    success: "#22c55e",
-    error:   "#ef4444",
-    warning: "#f59e0b",
-    info:    "#3b82f6",
-  };
-  return LEVEL_TEXT[entry.level] ?? "#9CA3AF";
+/** Class and, for agenda statuses, inline colour of the status dot. */
+function dotVisual(entry: ActivityEntry): { className: string; style?: React.CSSProperties } {
+  const agenda = agendaStatus(entry);
+  if (agenda) return { className: "", style: { backgroundColor: statusHex(agenda) } };
+  return { className: LEVEL_DOT[entry.level] ?? "bg-muted-foreground/50" };
+}
+
+/** Class and, for agenda statuses, inline colour of the event label. */
+function labelVisual(entry: ActivityEntry): { className: string; style?: React.CSSProperties } {
+  const agenda = agendaStatus(entry);
+  if (agenda) return { className: "", style: { color: statusText(agenda) } };
+  return { className: LEVEL_TEXT[entry.level] ?? "text-sidebar-foreground/70" };
 }
 
 // ── Running dot animation class ───────────────────────────────────────────────
@@ -231,32 +229,33 @@ export function NavActivity(): React.ReactElement {
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel className="flex items-center justify-between">
-        <span>Live Activity</span>
-        <span className="flex items-center gap-1">
+      <SidebarGroupLabel className="eyebrow flex h-7 items-center justify-between text-sidebar-foreground/55">
+        <span>Live activity</span>
+        <span className="flex items-center gap-1.5 normal-case tracking-normal" role="status">
           <span
             className={cn(
               "size-1.5 rounded-full transition-colors",
-              connected ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
+              connected ? "bg-success" : "bg-warning animate-pulse"
             )}
+            aria-hidden
           />
-          <span className="text-[9px] text-muted-foreground">
+          <span className="text-2xs font-medium text-sidebar-foreground/55">
             {connected ? "Live" : "Connecting…"}
           </span>
         </span>
       </SidebarGroupLabel>
 
       <SidebarGroupContent>
-        <div className="flex flex-col gap-0.5 px-2 pb-1">
+        <div className="flex flex-col gap-px px-2 pb-1">
           {dedupedEntries.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground/40 py-3 text-center italic">
+            <p className="py-3 text-center text-xs text-sidebar-foreground/45">
               No recent activity
             </p>
           ) : (
             dedupedEntries.map((entry) => {
               const href = entry.targetUrl || (entry.type === "agenda" ? "/agenda" : "/boards");
-              const dot = dotStyle(entry);
-              const color = labelColor(entry);
+              const dot = dotVisual(entry);
+              const label = labelVisual(entry);
               const animated = isAnimated(entry);
 
               const handleEntryClick = (e: React.MouseEvent) => {
@@ -277,16 +276,17 @@ export function NavActivity(): React.ReactElement {
                 <button
                   key={entry.id}
                   onClick={handleEntryClick}
-                  className="flex items-start gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-muted/40 group w-full text-left"
+                  className="group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-(--dur-fast) ease-(--ease-out) outline-none hover:bg-sidebar-accent/60 focus-visible:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring/60"
                   title={`${entry.title} — ${formatActivityEvent(entry)}`}
                 >
                   {/* Status dot */}
                   <span
                     className={cn(
-                      "mt-[3px] size-1.5 shrink-0 rounded-full",
+                      "mt-1.5 size-1.5 shrink-0 rounded-full",
+                      dot.className,
                       animated && "animate-pulse"
                     )}
-                    style={dot}
+                    style={dot.style}
                   />
 
                   {/* Content */}
@@ -294,23 +294,23 @@ export function NavActivity(): React.ReactElement {
                     {/* Top row: event label + timestamp */}
                     <div className="flex items-center justify-between gap-1">
                       <span
-                        className="text-[10px] font-semibold truncate"
-                        style={{ color }}
+                        className={cn("truncate text-xs font-medium", label.className)}
+                        style={label.style}
                       >
                         {formatActivityEvent(entry)}
                       </span>
-                      <span className="text-[8px] text-muted-foreground/50 shrink-0 tabular-nums">
+                      <span className="shrink-0 text-2xs tabular-nums text-sidebar-foreground/45">
                         {relativeTime(entry.timestamp)}
                       </span>
                     </div>
 
                     {/* Bottom row: title + agent badge */}
                     <div className="flex items-center gap-1 min-w-0">
-                      <p className="text-[9px] text-muted-foreground/70 truncate leading-tight flex-1">
+                      <p className="flex-1 truncate text-xs leading-snug text-sidebar-foreground/70">
                         {entry.title}
                       </p>
                       {entry.agent && (
-                        <span className="text-[8px] text-muted-foreground/40 shrink-0 tabular-nums">
+                        <span className="shrink-0 text-2xs text-sidebar-foreground/45">
                           {agentLabel(entry.agent)}
                         </span>
                       )}

@@ -128,7 +128,7 @@ export function TiptapEditor({ content, onChange, ext }: Props) {
         <span className="mx-1 h-4 w-px bg-border" />
         {tool(false, () => editor.chain().focus().undo().run(), Undo2Icon, "Undo")}
         {tool(false, () => editor.chain().focus().redo().run(), Redo2Icon, "Redo")}
-        <span className="ml-auto text-[10px] text-muted-foreground/70">
+        <span className="ml-auto text-2xs text-muted-foreground/70">
           {isHtml ? "HTML mode" : "Rich text"}
         </span>
       </div>

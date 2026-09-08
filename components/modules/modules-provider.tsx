@@ -31,9 +31,15 @@ export type ModuleSummary = {
 };
 
 type ModulesState = {
+  /**
+   * True once a load has settled, whether it succeeded or failed. Consumers
+   * gate on this, so a failed request must still flip it or they wait forever.
+   */
   ready: boolean;
   modules: ModuleSummary[];
   enabledIds: Set<string>;
+  /** Set when the last load failed, so consumers can show a reason and a retry. */
+  error: string | null;
 };
 
 type Ctx = ModulesState & {
@@ -46,6 +52,7 @@ const ModulesContext = createContext<Ctx | null>(null);
 export function ModulesProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ModulesState>({
     ready: false,
+    error: null,
     modules: [],
     // Optimistic default: assume everything is enabled until the GET resolves
     // (matches the seed behavior on first boot). Prevents UI flash during load.
@@ -61,14 +68,20 @@ export function ModulesProvider({ children }: { children: ReactNode }) {
     fetchingRef.current = true;
     try {
       const res = await fetch("/api/modules", { cache: "reload" });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`The module list request failed (${res.status}).`);
       const json = await res.json();
-      if (!json.ok) return;
+      if (!json.ok) throw new Error(typeof json.error === "string" ? json.error : "The module list could not be read.");
       const modules = (json.modules || []) as ModuleSummary[];
       const enabledIds = new Set<string>((json.enabledIds || []) as string[]);
-      setState({ ready: true, modules, enabledIds });
-    } catch {
-      // Keep the last successful snapshot during transient connection failures.
+      setState({ ready: true, modules, enabledIds, error: null });
+    } catch (error) {
+      // Keep the last successful snapshot, but never leave consumers waiting:
+      // mark the load settled and report why it failed.
+      setState((prev) => ({
+        ...prev,
+        ready: true,
+        error: error instanceof Error ? error.message : "The module list could not be loaded.",
+      }));
     } finally {
       fetchingRef.current = false;
     }
@@ -104,6 +117,7 @@ export function useModules(): Ctx {
     // (e.g. tests). Returns optimistic-all-enabled.
     return {
       ready: false,
+      error: null,
       modules: [],
       enabledIds: new Set(["kanban", "agenda", "processes", "documents", "system"]),
       isEnabled: () => true,

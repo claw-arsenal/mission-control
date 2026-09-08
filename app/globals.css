@@ -10,6 +10,125 @@
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Design system: semantic layer
+   The accent system (lib/theme-accent.ts) rewrites the base palette at runtime
+   (--background, --primary, --card, …). Everything below is derived from those
+   base tokens with color-mix / relative color syntax, so it follows the chosen
+   accent and theme automatically. Fixed-hue tokens (status, viz) are the only
+   exception and are deliberately accent-independent. See DESIGN.md.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Layout rhythm */
+  --page-x: 1rem;
+  --page-y: 1.25rem;
+  --section-gap: 1.25rem;
+  --header-height: 3.5rem;
+
+  /* Surfaces: 0 = page, 1 = card, 2 = inset panel, hover = interactive lift */
+  --surface-0: var(--background);
+  --surface-1: var(--card);
+  --surface-2: color-mix(in oklch, var(--card) 92%, var(--muted));
+  --surface-hover: color-mix(in oklch, var(--card) 96%, var(--foreground));
+  --surface-active: color-mix(in oklch, var(--card) 92%, var(--foreground));
+
+  /* Hairlines */
+  --line: color-mix(in oklch, var(--foreground) 8%, transparent);
+  --line-strong: color-mix(in oklch, var(--foreground) 14%, transparent);
+
+  /* Elevation: tinted with the foreground so it stays on-hue for every accent */
+  --elev-1:
+    0 1px 2px color-mix(in oklch, var(--foreground) 4%, transparent),
+    0 1px 3px color-mix(in oklch, var(--foreground) 3%, transparent);
+  --elev-2:
+    0 0 0 1px color-mix(in oklch, var(--foreground) 7%, transparent),
+    0 2px 4px -1px color-mix(in oklch, var(--foreground) 6%, transparent),
+    0 10px 24px -10px color-mix(in oklch, var(--foreground) 10%, transparent);
+  --elev-3:
+    0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+    0 12px 32px -12px color-mix(in oklch, var(--foreground) 22%, transparent);
+
+  /* Status vocabulary (fixed hues, never the accent). Pair: -fg ink on -soft. */
+  --success: oklch(0.56 0.15 155);
+  --success-fg: oklch(0.38 0.11 155);
+  --success-soft: oklch(0.955 0.04 155);
+  --warning: oklch(0.72 0.16 75);
+  --warning-fg: oklch(0.47 0.12 70);
+  --warning-soft: oklch(0.965 0.05 85);
+  --danger: oklch(0.58 0.21 25);
+  --danger-fg: oklch(0.47 0.19 25);
+  --danger-soft: oklch(0.955 0.03 20);
+  --info: oklch(0.58 0.16 245);
+  --info-fg: oklch(0.44 0.14 250);
+  --info-soft: oklch(0.955 0.03 245);
+
+  /* Data viz: two categorical series validated for CVD in both modes.
+     viz-1 follows the accent hue (clamped into the readable band); viz-2 sits
+     150° away so the pair stays distinct for every accent choice. */
+  --viz-1: var(--primary);
+  --viz-1: oklch(from var(--primary) clamp(0.47, l, 0.6) min(c, 0.24) h);
+  --viz-2: oklch(0.52 0.12 83);
+  --viz-2: oklch(from var(--primary) 0.52 0.12 calc(h + 150));
+  --viz-muted: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  --viz-grid: color-mix(in oklch, var(--foreground) 7%, transparent);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur-base: 200ms;
+  --dur-slow: 260ms;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --page-x: 1.5rem;
+    --page-y: 1.5rem;
+    --section-gap: 1.5rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --page-x: 2rem;
+  }
+}
+
+.dark {
+  --surface-2: color-mix(in oklch, var(--card) 86%, var(--background));
+  --surface-hover: color-mix(in oklch, var(--card) 94%, var(--foreground));
+  --surface-active: color-mix(in oklch, var(--card) 90%, var(--foreground));
+  --line: color-mix(in oklch, var(--foreground) 10%, transparent);
+  --line-strong: color-mix(in oklch, var(--foreground) 18%, transparent);
+  --elev-1:
+    0 1px 2px oklch(0 0 0 / 0.3),
+    0 1px 3px oklch(0 0 0 / 0.2);
+  --elev-2:
+    0 0 0 1px color-mix(in oklch, var(--foreground) 10%, transparent),
+    0 4px 10px -2px oklch(0 0 0 / 0.4),
+    0 16px 32px -12px oklch(0 0 0 / 0.5);
+  --elev-3:
+    0 0 0 1px color-mix(in oklch, var(--foreground) 12%, transparent),
+    0 20px 48px -12px oklch(0 0 0 / 0.65);
+
+  --success: oklch(0.72 0.15 155);
+  --success-fg: oklch(0.82 0.13 155);
+  --success-soft: oklch(0.72 0.15 155 / 0.14);
+  --warning: oklch(0.8 0.15 80);
+  --warning-fg: oklch(0.86 0.13 85);
+  --warning-soft: oklch(0.8 0.15 80 / 0.14);
+  --danger: oklch(0.7 0.19 25);
+  --danger-fg: oklch(0.8 0.15 25);
+  --danger-soft: oklch(0.7 0.19 25 / 0.16);
+  --info: oklch(0.72 0.14 245);
+  --info-fg: oklch(0.82 0.11 245);
+  --info-soft: oklch(0.72 0.14 245 / 0.14);
+
+  --viz-1: oklch(from var(--primary) 0.62 min(c, 0.17) h);
+  --viz-2: oklch(from var(--primary) 0.62 0.11 calc(h + 150));
+  --viz-grid: color-mix(in oklch, var(--foreground) 9%, transparent);
+}
+
 :root {
   --radius: 0.65rem;
   /* Soft purple-tinted white background */
@@ -114,11 +233,19 @@ body {
 }
 
 body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: var(--font-geist-sans), "Plus Jakarta Sans", "Segoe UI", sans-serif;
-  line-height: 1.35;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01", "calt";
+}
+
+h1, h2, h3, h4 {
+  text-wrap: balance;
+  letter-spacing: -0.01em;
 }
 
 a {
@@ -165,6 +292,83 @@ a {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Semantic layer */
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-success: var(--success);
+  --color-success-fg: var(--success-fg);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-fg: var(--warning-fg);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-fg: var(--danger-fg);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-fg: var(--info-fg);
+  --color-info-soft: var(--info-soft);
+  --color-viz-1: var(--viz-1);
+  --color-viz-2: var(--viz-2);
+  --color-viz-muted: var(--viz-muted);
+  --color-viz-grid: var(--viz-grid);
+
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+
+  --ease-out: var(--ease-out);
+  --ease-out-expo: var(--ease-out-expo);
+
+  /* Type scale: 11 / 12 / 13 / 14 / 16 / 18 / 20 / 24 / 30 (ratio ≈ 1.2) */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.5rem;
+  --text-md: 1rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.625rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.25rem;
+}
+
+/* Utilities for the semantic layer */
+@utility page-x {
+  padding-inline: var(--page-x);
+}
+@utility figure {
+  /* Standalone numbers: proportional figures, tight tracking. */
+  font-variant-numeric: proportional-nums;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+@utility eyebrow {
+  font-size: var(--text-2xs);
+  line-height: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+@utility surface-card {
+  background-color: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--elev-1);
 }
 
 @layer base {
@@ -204,6 +408,25 @@ a {
 
 .agenda-running {
   animation: agenda-running-glow 2s ease-in-out infinite;
+}
+
+/* Slim, theme-tinted scrollbars for dense panels such as Kanban lists */
+.mc-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--border) 85%, var(--foreground)) transparent;
+}
+.mc-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.mc-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: color-mix(in oklch, var(--border) 85%, var(--foreground));
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.mc-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

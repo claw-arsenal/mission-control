@@ -10,9 +10,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label as UiLabel } from "@/components/ui/label";
-import { Trash2Icon, PencilIcon, PlusIcon, XIcon, CheckIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { AlertTriangleIcon, Trash2Icon, PencilIcon, PlusIcon, XIcon, CheckIcon } from "lucide-react";
 import type { Label } from "@/types/tasks";
 
 const SWATCHES = [
@@ -114,7 +117,7 @@ function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDel
         </DialogHeader>
 
         <div className="flex flex-col gap-3 py-2">
-          <div className="rounded-md border bg-muted/30 p-3">
+          <div className="rounded-md border border-line bg-surface-2 p-3">
             <div className="flex items-end gap-2">
               <div className="flex-1">
                 <UiLabel htmlFor="ml-name" className="mb-1.5 block text-xs">Name</UiLabel>
@@ -126,7 +129,7 @@ function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDel
                   onKeyDown={(e) => { if (e.key === "Enter") void handleAdd(); }}
                 />
               </div>
-              <Button onClick={() => void handleAdd()} disabled={busy} size="sm" className="gap-1.5">
+              <Button onClick={() => void handleAdd()} disabled={busy || !name.trim()} size="sm" className="gap-1.5">
                 <PlusIcon className="h-4 w-4" /> Add
               </Button>
             </div>
@@ -138,27 +141,41 @@ function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDel
                     key={swatch}
                     type="button"
                     aria-label={`Color ${swatch}`}
+                    aria-pressed={color === swatch}
                     onClick={() => setColor(swatch)}
-                    className="size-6 rounded-full border-2 transition-transform hover:scale-110"
-                    style={{
-                      backgroundColor: swatch,
-                      borderColor: color === swatch ? "#0f172a" : "transparent",
-                    }}
+                    className={cn(
+                      "size-6 rounded-full transition-transform duration-(--dur-fast) ease-(--ease-out)",
+                      "motion-safe:hover:scale-110",
+                      "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                      color === swatch && "ring-2 ring-foreground ring-offset-2 ring-offset-background",
+                    )}
+                    style={{ backgroundColor: swatch }}
                   />
                 ))}
               </div>
             </div>
           </div>
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && (
+            <Alert variant="destructive">
+              <AlertTriangleIcon />
+              <AlertTitle>That did not work</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
 
-          <div className="max-h-[280px] overflow-auto rounded-md border">
+          <div className="max-h-[280px] overflow-auto rounded-md border border-line">
             {labels.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                No labels yet. Add one above.
-              </p>
+              <Empty className="min-h-0 border-0 bg-transparent py-6">
+                <EmptyHeader>
+                  <EmptyTitle className="text-sm">No labels yet</EmptyTitle>
+                  <EmptyDescription className="text-xs">
+                    Add one above to start tagging tickets on this board.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
             ) : (
-              <ul className="divide-y">
+              <ul className="divide-y divide-line">
                 {labels.map((l) => (
                   <li key={l.id} className="flex items-center gap-2 px-3 py-2">
                     {editingId === l.id ? (
@@ -179,12 +196,14 @@ function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDel
                                 key={swatch}
                                 type="button"
                                 aria-label={`Color ${swatch}`}
+                                aria-pressed={editColor === swatch}
                                 onClick={() => setEditColor(swatch)}
-                                className="size-5 rounded-full border-2"
-                                style={{
-                                  backgroundColor: swatch,
-                                  borderColor: editColor === swatch ? "#0f172a" : "transparent",
-                                }}
+                                className={cn(
+                                  "size-5 rounded-full",
+                                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                                  editColor === swatch && "ring-2 ring-foreground ring-offset-2 ring-offset-background",
+                                )}
+                                style={{ backgroundColor: swatch }}
                               />
                             ))}
                           </div>
@@ -199,8 +218,8 @@ function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDel
                     ) : (
                       <>
                         <span
-                          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium text-white"
-                          style={{ backgroundColor: l.color }}
+                          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                          style={{ backgroundColor: l.color, color: "#fff" }}
                         >
                           {l.name}
                         </span>
@@ -211,7 +230,7 @@ function ManageLabelsDialog({ open, boardName, labels, onCreate, onUpdate, onDel
                         <Button
                           size="icon-sm"
                           variant="ghost"
-                          className="text-destructive hover:text-destructive"
+                          className="text-danger-fg hover:text-danger-fg"
                           onClick={() => void handleDelete(l.id)}
                           disabled={busy}
                           aria-label={`Delete ${l.name}`}

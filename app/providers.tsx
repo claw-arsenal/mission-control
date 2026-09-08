@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { NotificationProvider } from "@/components/providers/notification-provider";
 import { ModulesProvider } from "@/components/modules/modules-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 function StartupEventHook() {
   const mountedRef = useRef(false);
@@ -43,9 +44,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider>
       <ModulesProvider>
-        {!disableGlobalRealtime ? <StartupEventHook /> : null}
-        {!disableGlobalRealtime ? <NotificationProvider /> : null}
-        {children}
+        {/* One tooltip provider for the whole app: components mount Tooltip directly. */}
+        <TooltipProvider delayDuration={250}>
+          {!disableGlobalRealtime ? <StartupEventHook /> : null}
+          {!disableGlobalRealtime ? <NotificationProvider /> : null}
+          {children}
+        </TooltipProvider>
       </ModulesProvider>
     </ThemeProvider>
   );

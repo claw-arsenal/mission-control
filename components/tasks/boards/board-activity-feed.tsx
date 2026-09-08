@@ -2,8 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNow } from "@/hooks/use-now";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import {
   ActivityIcon,
@@ -35,6 +44,9 @@ type Props = {
   activity: LiveLog[];
   loading: boolean;
   onTicketClick: (ticketId: string) => void;
+  /** Set when the feed query failed; renders a retry alert instead of an empty state. */
+  error?: string | null;
+  onRetry?: () => void;
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,27 +66,28 @@ function relativeTime(dateStr: string, now: number): string {
   return `${days}d ago`;
 }
 
+/** Activity levels read as severity, so they use the status vocabulary. */
 const LEVEL_CONFIG: Record<string, {
-  border: string;
-  bg: string;
-  text: string;
+  ink: string;
+  soft: string;
+  word: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = {
-  success: { border: "border-l-emerald-500", bg: "bg-emerald-500/8", text: "text-emerald-600 dark:text-emerald-400", icon: CheckCircle2Icon },
-  error: { border: "border-l-red-500", bg: "bg-red-500/8", text: "text-red-600 dark:text-red-400", icon: XCircleIcon },
-  warning: { border: "border-l-amber-500", bg: "bg-amber-500/8", text: "text-amber-600 dark:text-amber-400", icon: AlertTriangleIcon },
-  info: { border: "border-l-blue-500", bg: "bg-blue-500/8", text: "text-blue-600 dark:text-blue-400", icon: InfoIcon },
+  success: { ink: "text-success-fg", soft: "bg-success-soft", word: "Success", icon: CheckCircle2Icon },
+  error: { ink: "text-danger-fg", soft: "bg-danger-soft", word: "Error", icon: XCircleIcon },
+  warning: { ink: "text-warning-fg", soft: "bg-warning-soft", word: "Warning", icon: AlertTriangleIcon },
+  info: { ink: "text-info-fg", soft: "bg-info-soft", word: "Info", icon: InfoIcon },
 };
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function BoardActivityFeed({ activity, loading, onTicketClick }: Props) {
+export function BoardActivityFeed({ activity, loading, onTicketClick, error, onRetry }: Props) {
   const [autoScroll, setAutoScroll] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(activity.length);
 
-  // Auto-scroll to top when new entries arrive
+  // Auto-scroll to top when new entries arrive.
   useEffect(() => {
     if (autoScroll && activity.length > prevCountRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = 0;
@@ -82,65 +95,75 @@ export function BoardActivityFeed({ activity, loading, onTicketClick }: Props) {
     prevCountRef.current = activity.length;
   }, [activity.length, autoScroll]);
 
-  // Refresh relative times every 30s
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(timer);
-  }, []);
-
   const toggleExpand = useCallback((id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
   }, []);
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 pb-3 border-b border-border/40">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between gap-2 border-b border-line pb-3">
         <div className="flex items-center gap-2">
-          <ActivityIcon className="size-3.5 text-primary" />
-          <h3 className="text-xs font-bold uppercase tracking-wide text-foreground">Activity</h3>
-          <Badge variant="secondary" className="h-5 px-1.5 text-[10px] tabular-nums">
+          <ActivityIcon className="size-3.5 text-primary" aria-hidden />
+          <h3 className="eyebrow text-foreground">Activity</h3>
+          <Badge variant="secondary" className="h-5 px-1.5 text-2xs tabular-nums">
             {activity.length}
           </Badge>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className={cn(
-            "size-2 rounded-full transition-colors",
-            loading ? "bg-amber-500 animate-pulse" : "bg-emerald-500",
-          )} />
-          <span className="text-[10px] text-muted-foreground">
-            {loading ? "Connecting…" : "Live"}
+          <span
+            className={cn(
+              "size-2 rounded-full transition-colors duration-(--dur-base) ease-(--ease-out)",
+              error ? "bg-danger" : loading ? "bg-warning motion-safe:animate-pulse" : "bg-success",
+            )}
+            aria-hidden
+          />
+          <span className="text-2xs text-muted-foreground">
+            {error ? "Offline" : loading ? "Connecting…" : "Live"}
           </span>
-          <Button
-            variant={autoScroll ? "default" : "ghost"}
-            size="icon"
-            className="size-6 ml-1"
-            onClick={() => setAutoScroll((v) => !v)}
-            title={autoScroll ? "Auto-scroll on" : "Auto-scroll off"}
+          <Toggle
+            size="sm"
+            pressed={autoScroll}
+            onPressedChange={setAutoScroll}
+            aria-label={autoScroll ? "Auto-scroll on" : "Auto-scroll off"}
+            className="ml-1 size-6 min-w-6 px-0"
           >
             <ArrowDownIcon className="size-3" />
-          </Button>
+          </Toggle>
         </div>
       </div>
 
-      {/* Feed */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto pt-2 -mx-1 px-1">
-        {loading && activity.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="size-8 rounded-full bg-muted flex items-center justify-center mb-3 animate-pulse">
-              <ActivityIcon className="size-4 text-muted-foreground" />
-            </div>
-            <p className="text-xs text-muted-foreground">Waiting for activity…</p>
+      <div ref={scrollRef} className="-mx-1 flex-1 overflow-y-auto px-1 pt-2">
+        {error ? (
+          <Alert variant="destructive" className="mt-2">
+            <XCircleIcon />
+            <AlertTitle>Activity is unavailable</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+            {onRetry && (
+              <AlertActions>
+                <Button size="sm" variant="outline" onClick={onRetry}>
+                  Try again
+                </Button>
+              </AlertActions>
+            )}
+          </Alert>
+        ) : loading && activity.length === 0 ? (
+          <div className="flex flex-col gap-1" aria-busy="true" aria-label="Loading activity">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="rounded-lg border border-line px-2.5 py-2">
+                <Skeleton className="h-3 w-2/3" />
+                <Skeleton className="mt-1.5 h-2.5 w-1/2" />
+              </div>
+            ))}
           </div>
         ) : activity.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="size-8 rounded-full bg-muted flex items-center justify-center mb-3">
-              <ActivityIcon className="size-4 text-muted-foreground/40" />
-            </div>
-            <p className="text-xs text-muted-foreground">No activity yet</p>
-            <p className="text-[10px] text-muted-foreground/60 mt-0.5">Activity will appear here when tickets are executed</p>
-          </div>
+          <Empty className="min-h-40 border-line">
+            <EmptyHeader>
+              <EmptyTitle className="text-sm">No activity yet</EmptyTitle>
+              <EmptyDescription className="text-xs">
+                Runs, comments, and status changes on this board show up here as they happen.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           <ActivityList
             activity={activity}
@@ -185,12 +208,9 @@ function ActivityList({
     const bucket = bucketFor(entry.occurred_at);
     if (bucket !== lastBucket) {
       out.push(
-        <div
-          key={`hdr-${bucket}-${index}`}
-          className="mt-2 first:mt-0 px-1 pt-1 text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60"
-        >
+        <li key={`hdr-${bucket}-${index}`} className="eyebrow mt-2 px-1 pt-1 first:mt-0">
           {bucket}
-        </div>,
+        </li>,
       );
       lastBucket = bucket;
     }
@@ -200,72 +220,94 @@ function ActivityList({
     const isExpanded = expandedId === entry.id;
     const isNew = index === 0 && activity.length > 1;
     const isWorker = entry.source === "Worker";
+    const openable = Boolean(entry.ticket_id);
 
     out.push(
-      <button
+      <li
         key={entry.id}
-        onClick={() => {
-          if (entry.ticket_id) onTicketClick(entry.ticket_id);
-        }}
         className={cn(
-          "w-full text-left rounded-lg border-l-[3px] border border-border/40 px-2.5 py-1.5 transition-all duration-200 cursor-pointer",
-          "hover:bg-muted/40 hover:border-border/60",
-          config.border,
-          isNew && "animate-in fade-in slide-in-from-top-2 duration-300",
+          "relative rounded-lg border border-line px-2.5 py-1.5",
+          "transition-colors duration-(--dur-fast) ease-(--ease-out)",
+          openable && "hover:bg-surface-hover",
+          "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50",
+          entry.level === "error" && config.soft,
+          isNew && "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2",
         )}
       >
         <div className="flex items-center gap-2">
-          <LevelIcon className={cn("size-3 shrink-0", config.text)} />
-          <span className={cn("text-[11px] font-semibold flex-1 truncate", config.text)}>
-            {entry.event}
-          </span>
-          {entry.occurred_at && (
-            <span className="text-[9px] text-muted-foreground/60 shrink-0 tabular-nums">
-              {relativeTime(entry.occurred_at, now)}
+          <LevelIcon className={cn("size-3 shrink-0", config.ink)} aria-hidden />
+          {openable ? (
+            <button
+              type="button"
+              onClick={() => onTicketClick(entry.ticket_id!)}
+              className={cn(
+                "flex-1 truncate rounded text-left text-xs font-semibold outline-none",
+                "after:absolute after:inset-0 after:content-['']",
+                config.ink,
+              )}
+            >
+              <span className="sr-only">{config.word}: </span>
+              {entry.event}
+            </button>
+          ) : (
+            <span className={cn("flex-1 truncate text-xs font-semibold", config.ink)}>
+              <span className="sr-only">{config.word}: </span>
+              {entry.event}
             </span>
+          )}
+          {entry.occurred_at && (
+            <time
+              dateTime={entry.occurred_at}
+              className="shrink-0 text-2xs tabular-nums text-muted-foreground"
+            >
+              {relativeTime(entry.occurred_at, now)}
+            </time>
           )}
         </div>
         {entry.ticket_title && (
-          <p className="text-[11px] font-medium text-foreground/80 truncate mt-0.5 pl-5">
+          <p className="mt-0.5 truncate pl-5 text-xs font-medium text-foreground/80">
             {entry.ticket_title}
           </p>
         )}
         {(entry.actor_name || (entry.source && !isWorker)) && (
-          <div className="flex items-center gap-1.5 mt-0.5 pl-5 text-[9px] text-muted-foreground/70">
+          <div className="mt-0.5 flex items-center gap-1.5 pl-5 text-2xs text-muted-foreground">
             {entry.actor_name ? (
-              <span
-                className="inline-flex items-center gap-1"
-                title={entry.actor_email || undefined}
-              >
-                <UserIcon className="size-2.5 text-muted-foreground/60" />
-                <span className="font-medium text-muted-foreground">{entry.actor_name}</span>
+              <span className="inline-flex items-center gap-1" title={entry.actor_email || undefined}>
+                <UserIcon className="size-2.5" aria-hidden />
+                <span className="font-medium">{entry.actor_name}</span>
               </span>
             ) : null}
             {entry.source && !isWorker && (
               <span className="inline-flex items-center gap-1">
-                {entry.actor_name ? <span className="text-muted-foreground/30">·</span> : null}
-                <BotIcon className="size-2.5 text-muted-foreground/50" />
-                <span className="text-muted-foreground/60">{entry.source}</span>
+                {entry.actor_name ? <span aria-hidden>·</span> : null}
+                <BotIcon className="size-2.5" aria-hidden />
+                <span>{entry.source}</span>
               </span>
             )}
           </div>
         )}
         {entry.details && (
-          <div className="mt-0.5 pl-5">
-            <p
-              onClick={(e) => { e.stopPropagation(); toggleExpand(entry.id); }}
-              className={cn(
-                "text-[10px] text-muted-foreground/70 leading-relaxed cursor-pointer hover:text-muted-foreground transition-colors",
-                !isExpanded && "line-clamp-1",
-              )}
-            >
-              {entry.details}
-            </p>
-          </div>
+          <button
+            type="button"
+            onClick={() => toggleExpand(entry.id)}
+            aria-expanded={isExpanded}
+            className={cn(
+              "relative z-10 mt-0.5 ml-5 block rounded text-left text-2xs leading-relaxed text-muted-foreground",
+              "transition-colors duration-(--dur-fast) ease-(--ease-out) hover:text-foreground",
+              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              !isExpanded && "line-clamp-1",
+            )}
+          >
+            {entry.details}
+          </button>
         )}
-      </button>,
+      </li>,
     );
   });
 
-  return <div className="flex flex-col gap-1">{out}</div>;
+  return (
+    <ol className="flex flex-col gap-1" aria-label="Board activity">
+      {out}
+    </ol>
+  );
 }

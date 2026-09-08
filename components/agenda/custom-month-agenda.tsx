@@ -8,6 +8,7 @@ import {
   addMonths, subMonths, addWeeks, subWeeks, addDays, subDays,
   format,
 } from "date-fns";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,17 +18,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
+  IconCalendar,
   IconChevronLeft,
   IconChevronRight,
   IconInfoCircle,
+  IconPlus,
 } from "@tabler/icons-react";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowsRotate } from "@fortawesome/free-solid-svg-icons";
 import { useNow, LiveDuration } from "@/hooks/use-now";
@@ -187,7 +187,7 @@ function OccurrenceStatusDot({ result, size = 6 }: { result: CalendarEvent["late
 function RunningBadge({ status = "running" }: { status?: "running" | "auto_retry" }) {
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] leading-none shadow-sm ring-1"
+      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase tracking-wider leading-none shadow-sm ring-1"
       style={{
         backgroundColor: `${statusHex(status)}1F`,
         color: statusText(status),
@@ -206,7 +206,7 @@ function RunningBadge({ status = "running" }: { status?: "running" | "auto_retry
 function NeedsRetryBadge() {
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] leading-none shadow-sm ring-1"
+      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase tracking-wider leading-none shadow-sm ring-1"
       style={{
         backgroundColor: `${STATUS_HEX.needs_retry}1F`,
         color: statusText('needs_retry'),
@@ -321,7 +321,7 @@ function EventPill({ event }: { event: CalendarEvent }) {
           style={{ backgroundColor: dotColor }}
         />
         <span
-          className="flex-1 text-[12px] font-semibold leading-tight truncate"
+          className="flex-1 text-xs font-semibold leading-tight truncate"
           style={{ color, letterSpacing: "-0.01em" }}
         >
           {event.title}
@@ -330,7 +330,7 @@ function EventPill({ event }: { event: CalendarEvent }) {
         {event.latestResult && (() => {
           const statusColor = statusHex(event.latestResult);
           // Shared text style — uppercase, bold, same size for timer and status
-          const labelCls = "text-[8px] font-bold uppercase tracking-wider leading-none tabular-nums";
+          const labelCls = "text-2xs font-bold uppercase tracking-wider leading-none tabular-nums";
           // Timer label: running uses live duration, queued/scheduled uses countdown
           const timerLabel = isActiveRetryState(event.latestResult)
             ? null // rendered via LiveDuration below
@@ -364,7 +364,7 @@ function EventPill({ event }: { event: CalendarEvent }) {
                 )}
                 {/* Middot — only when there is a timer */}
                 {hasTimer && (
-                  <span className="text-[8px] font-bold leading-none" style={{ color: statusColor, opacity: 0.45 }}>·</span>
+                  <span className="text-2xs font-bold leading-none" style={{ color: statusColor, opacity: 0.45 }}>·</span>
                 )}
                 {/* Status label */}
                 <span className={labelCls} style={{ color: statusColor }}>{statusWord}</span>
@@ -392,7 +392,7 @@ function EventPill({ event }: { event: CalendarEvent }) {
       {timeStr && (
         <div className="pl-[14px]">
           <span
-            className="text-[10px] font-medium leading-none"
+            className="text-2xs font-medium leading-none"
             style={{ color, opacity: 0.7 }}
           >
             {timeStr}
@@ -444,7 +444,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
       {/* Title row: title · [TIMER · STATUS label · 8x8dot] */}
       <div className="flex items-center gap-1.5">
         <span
-          className="flex-1 text-[13px] font-bold leading-tight truncate"
+          className="flex-1 text-sm font-bold leading-tight truncate"
           style={{ color, letterSpacing: "-0.01em" }}
         >
           {event.title}
@@ -452,7 +452,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
         {/* Right cluster: [TIMER · STATUS · DOT], recurring icon below */}
         {event.latestResult && (() => {
           const statusColor = statusHex(event.latestResult);
-          const labelCls = "text-[9px] font-bold uppercase tracking-wider leading-none tabular-nums";
+          const labelCls = "text-2xs font-bold uppercase tracking-wider leading-none tabular-nums";
           const timerLabel = isActiveRetryState(event.latestResult) ? null : cronLabel ?? null;
           const hasTimer = isActiveRetryState(event.latestResult) || !!timerLabel;
           const statusWord =
@@ -481,7 +481,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
                   <span className={labelCls} style={{ color: statusColor }}>{timerLabel}</span>
                 )}
                 {hasTimer && (
-                  <span className="text-[9px] font-bold leading-none" style={{ color: statusColor, opacity: 0.45 }}>·</span>
+                  <span className="text-2xs font-bold leading-none" style={{ color: statusColor, opacity: 0.45 }}>·</span>
                 )}
                 <span className={labelCls} style={{ color: statusColor }}>{statusWord}</span>
                 <OccurrenceStatusDot result={event.latestResult} size={8} />
@@ -506,7 +506,7 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
       {timeStr && (
         <div>
           <span
-            className="text-[11px] font-semibold leading-none"
+            className="text-2xs font-semibold leading-none"
             style={{ color, opacity: 0.7 }}
           >
             {timeStr}{event.timezone ? ` ${getTimezoneAbbr(event.timezone)}` : ''}
@@ -518,6 +518,88 @@ function TimeGridEventBlock({ event }: { event: CalendarEvent }) {
 }
 
 // ── Day cell ─────────────────────────────────────────────────────────────────
+
+/**
+ * The month as a list of days that have events, for widths where a
+ * seven-column grid would truncate every title to a few characters.
+ */
+function MonthDayList({
+  days,
+  events,
+  currentDate,
+  onEventClick,
+  onDayClick,
+  onAddEvent,
+}: {
+  days: Date[];
+  events: CalendarEvent[];
+  currentDate: Date;
+  onEventClick: (event: CalendarEvent) => void;
+  onDayClick?: (date: Date) => void;
+  onAddEvent?: () => void;
+}) {
+  const withEvents = days
+    .filter((day) => isSameMonth(day, currentDate))
+    .map((day) => {
+      const dateStr = format(day, "yyyy-MM-dd");
+      return {
+        day,
+        dateStr,
+        events: events
+          .filter((event) => event.date === dateStr)
+          .sort((a, b) => (a.time || "").localeCompare(b.time || "")),
+      };
+    })
+    .filter((entry) => entry.events.length > 0);
+
+  if (withEvents.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+        <IconCalendar className="size-8 text-muted-foreground/50" aria-hidden />
+        <p className="text-sm font-medium text-foreground">Nothing scheduled in {format(currentDate, "MMMM yyyy")}</p>
+        <p className="text-xs text-muted-foreground">Events you schedule for this month appear here.</p>
+        {onAddEvent ? (
+          <Button size="sm" className="mt-2" onClick={onAddEvent}>
+            <IconPlus className="size-4" aria-hidden />
+            Add event
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <ol className="divide-y divide-line">
+      {withEvents.map(({ day, dateStr, events: dayEvents }) => (
+        <li key={dateStr} className={cn("px-3 py-3", isToday(day) && "bg-primary/5")}>
+          <button
+            type="button"
+            onClick={() => onDayClick?.(day)}
+            className="mb-2 flex items-baseline gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <span className={cn("figure text-md", isToday(day) ? "text-primary" : "text-foreground")}>
+              {format(day, "d")}
+            </span>
+            <span className="text-xs text-muted-foreground">{format(day, "EEEE")}</span>
+            {isToday(day) ? <span className="eyebrow text-primary">Today</span> : null}
+          </button>
+          <div className="flex flex-col gap-1">
+            {dayEvents.map((event) => (
+              <button
+                key={event.id}
+                type="button"
+                onClick={() => onEventClick(event)}
+                className="rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <EventPill event={event} />
+              </button>
+            ))}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 function DayCell({
   day,
@@ -615,7 +697,7 @@ function DayCell({
           {overflow > 0 && (
             <button
               onClick={(e) => { e.stopPropagation(); setShowAllDialog(true); }}
-              className="flex items-center gap-1 text-[10px] font-bold text-primary hover:text-primary/80 bg-primary/8 hover:bg-primary/15 rounded-md px-2 py-1 mt-0.5 transition-all cursor-pointer w-fit"
+              className="flex items-center gap-1 text-2xs font-bold text-primary hover:text-primary/80 bg-primary/8 hover:bg-primary/15 rounded-md px-2 py-1 mt-0.5 transition-all cursor-pointer w-fit"
             >
               <span>+{overflow} more</span>
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0">
@@ -633,17 +715,17 @@ function DayCell({
             <DialogHeader className="px-6 pt-5 pb-3">
               <div className="flex items-center gap-3">
                 <div className="flex flex-col items-center justify-center select-none">
-                  <span className="text-[9px] font-black tracking-[0.15em] text-primary/60 uppercase">
+                  <span className="text-2xs font-semibold tracking-wider text-primary/60 uppercase">
                     {format(day, "MMM").toUpperCase()}
                   </span>
-                  <span className="text-[26px] font-black leading-none text-primary tracking-tight">
+                  <span className="text-2xl font-semibold leading-none text-primary tracking-tight">
                     {format(day, "d")}
                   </span>
                 </div>
                 <div className="h-10 w-px bg-border/60" />
                 <div>
                   <DialogTitle className="text-base">{format(day, "EEEE, MMMM d")}</DialogTitle>
-                  <DialogDescription className="text-[11px]">
+                  <DialogDescription className="text-2xs">
                     {dayEvents.length} event{dayEvents.length !== 1 ? "s" : ""} scheduled
                   </DialogDescription>
                 </div>
@@ -683,10 +765,10 @@ function DayCell({
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                           {timeStr && (
-                            <span className="text-[11px] text-muted-foreground font-medium">{timeStr}</span>
+                            <span className="text-2xs text-muted-foreground font-medium">{timeStr}</span>
                           )}
                           {evt.status === "draft" && (
-                            <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground/60 bg-muted px-1.5 py-0.5 rounded">
+                            <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground/60 bg-muted px-1.5 py-0.5 rounded">
                               Draft
                             </span>
                           )}
@@ -695,14 +777,14 @@ function DayCell({
                               <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded" style={{ backgroundColor: statusBg(evt.latestResult) }}>
                                 <RunningBadge status={evt.latestResult} />
                                 <span style={{ color: statusHex(evt.latestResult) }}>
-                                  <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix="· " className="text-[10px] font-bold tabular-nums" />
+                                  <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix="· " className="text-2xs font-bold tabular-nums" />
                                 </span>
                               </span>
                             ) : evt.latestResult === "needs_retry" ? (
                               <NeedsRetryBadge />
                             ) : (
                               <span
-                                className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                                className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                                 style={{
                                   ...(statusResultStyle(evt.latestResult) ?? {}),
                                 }}
@@ -712,7 +794,7 @@ function DayCell({
                                   : evt.latestResult === "cancelled" ? "Cancelled"
                                   : evt.latestResult === "skipped" ? "⏭ Skipped"
                                   : evt.latestResult}
-                                <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix=" · " className="text-[9px] font-bold tabular-nums" />
+                                <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix=" · " className="text-2xs font-bold tabular-nums" />
                               </span>
                             )
                           )}
@@ -820,7 +902,7 @@ function WeekHourCell({
         {overflow > 0 && (
           <button
             onClick={(e) => { e.stopPropagation(); setShowMore(true); }}
-            className="flex items-center gap-1 text-[10px] font-bold text-primary hover:text-primary/80 bg-primary/8 hover:bg-primary/15 rounded-md px-2 py-1 transition-all cursor-pointer w-fit"
+            className="flex items-center gap-1 text-2xs font-bold text-primary hover:text-primary/80 bg-primary/8 hover:bg-primary/15 rounded-md px-2 py-1 transition-all cursor-pointer w-fit"
           >
             +{overflow} more
           </button>
@@ -834,10 +916,10 @@ function WeekHourCell({
             <DialogHeader className="px-6 pt-5 pb-3">
               <div className="flex items-center gap-3">
                 <div className="flex flex-col items-center justify-center select-none">
-                  <span className="text-[9px] font-black tracking-[0.15em] text-primary/60 uppercase">
+                  <span className="text-2xs font-semibold tracking-wider text-primary/60 uppercase">
                     {format(day, "MMM").toUpperCase()}
                   </span>
-                  <span className="text-[26px] font-black leading-none text-primary tracking-tight">
+                  <span className="text-2xl font-semibold leading-none text-primary tracking-tight">
                     {format(day, "d")}
                   </span>
                 </div>
@@ -846,7 +928,7 @@ function WeekHourCell({
                   <DialogTitle className="text-base">
                     {format(day, "EEEE, MMMM d")} · {String(hour).padStart(2, "0")}:00
                   </DialogTitle>
-                  <DialogDescription className="text-[11px]">
+                  <DialogDescription className="text-2xs">
                     {allHourEvts.length} event{allHourEvts.length !== 1 ? "s" : ""} at this hour
                   </DialogDescription>
                 </div>
@@ -878,20 +960,20 @@ function WeekHourCell({
                           {evt.isRecurring && <RecurringIcon size={11} />}
                         </div>
                         <div className="flex items-center gap-2 mt-1">
-                          {timeStr && <span className="text-[11px] text-muted-foreground font-medium">{timeStr}</span>}
+                          {timeStr && <span className="text-2xs text-muted-foreground font-medium">{timeStr}</span>}
                           {evt.latestResult && evt.latestResult !== "scheduled" && evt.latestResult !== "queued" && (
                             isActiveRetryState(evt.latestResult) ? (
                               <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded" style={{ backgroundColor: statusBg(evt.latestResult) }}>
                                 <RunningBadge status={evt.latestResult} />
                                 <span style={{ color: statusHex(evt.latestResult) }}>
-                                  <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix="· " className="text-[10px] font-bold tabular-nums" />
+                                  <LiveDuration startedAt={evt.runStartedAt} finishedAt={evt.runFinishedAt} prefix="· " className="text-2xs font-bold tabular-nums" />
                                 </span>
                               </span>
                             ) : evt.latestResult === "needs_retry" ? (
                               <NeedsRetryBadge />
                             ) : (
                               <span
-                                className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                                className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                                 style={{
                                   ...(statusResultStyle(evt.latestResult) ?? {}),
                                 }}
@@ -960,7 +1042,7 @@ function WeekView({
                 isToday(day) ? "bg-primary/6" : "",
               ].join(" ")}
             >
-              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+              <span className="text-2xs font-bold uppercase tracking-widest text-muted-foreground/70">
                 {format(day, "EEE")}
               </span>
               <span
@@ -986,7 +1068,7 @@ function WeekView({
                 key={`gutter-${h}`}
                 className="relative border-b border-r border-dashed border-border/30 flex items-start justify-end pr-2 pt-1 min-h-[60px]"
               >
-                <span className="text-[10px] text-muted-foreground/50 font-semibold tabular-nums">
+                <span className="text-2xs text-muted-foreground/50 font-semibold tabular-nums">
                   {String(h).padStart(2, "0")}:00
                 </span>
                 {/* Now dot on gutter — sits on the line, right-aligned to connect with day columns */}
@@ -1076,7 +1158,7 @@ function DayView({
       <div className="w-full min-w-0">
         {/* Day header */}
         <div className="flex flex-col items-center py-4 border-b bg-muted/40">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+          <span className="text-2xs font-bold uppercase tracking-widest text-muted-foreground/70">
             {format(day, "EEEE")}
           </span>
           <span
@@ -1126,7 +1208,7 @@ function DayView({
                 }}
               >
                 <div className="w-16 shrink-0 flex items-start justify-end pr-2 pt-1">
-                  <span className="text-[10px] text-muted-foreground/50 font-semibold tabular-nums">
+                  <span className="text-2xs text-muted-foreground/50 font-semibold tabular-nums">
                     {String(h).padStart(2, "0")}:00
                   </span>
                 </div>
@@ -1312,116 +1394,91 @@ export function CustomMonthAgenda({
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       {/* ── Header bar ─────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Left: badge + title */}
-        <div className="flex items-center gap-4">
-          <div className="flex flex-col items-center justify-center select-none">
-            <span className="text-[10px] font-black tracking-[0.15em] text-primary/60 uppercase">
-              {badgeMonth}
-            </span>
-            <span className="text-[28px] font-black leading-none text-primary tracking-tight">
-              {badgeDay}
-            </span>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex select-none flex-col items-center justify-center">
+            <span className="eyebrow text-primary/70">{badgeMonth}</span>
+            <span className="figure text-2xl leading-none text-primary">{badgeDay}</span>
           </div>
 
-          <div className="h-10 w-px bg-border/60" />
+          <Separator orientation="vertical" className="data-[orientation=vertical]:h-10" />
 
-          <div className="flex flex-col gap-0.5">
-            <h2 className="text-[17px] font-bold tracking-tight text-foreground">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <h2 className="truncate text-lg font-semibold tracking-tight text-foreground">
               {titleText}
             </h2>
-            {viewMode === "month" && <p className="text-xs text-muted-foreground">{rangeText}</p>}
+            {viewMode === "month" && <p className="truncate text-xs text-muted-foreground">{rangeText}</p>}
           </div>
         </div>
 
         {/* Right: controls */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 rounded-lg cursor-pointer"
-            onClick={handlePrev}
-            aria-label={`Previous ${viewMode}`}
-          >
-            <IconChevronLeft className="size-4" />
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button variant="outline" size="icon-sm" onClick={handlePrev} aria-label={`Previous ${viewMode}`}>
+            <IconChevronLeft />
           </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9 px-3.5 rounded-lg text-[13px] font-semibold cursor-pointer"
-            onClick={handleToday}
-          >
+          <Button variant="outline" size="sm" onClick={handleToday}>
             Today
           </Button>
 
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 rounded-lg cursor-pointer"
-            onClick={handleNext}
-            aria-label={`Next ${viewMode}`}
-          >
-            <IconChevronRight className="size-4" />
+          <Button variant="outline" size="icon-sm" onClick={handleNext} aria-label={`Next ${viewMode}`}>
+            <IconChevronRight />
           </Button>
 
-          <Select value={viewMode} onValueChange={(v) => onViewModeChange(v as ViewMode)}>
-            <SelectTrigger aria-label="Calendar view" className="h-9 w-[132px] rounded-lg text-[13px] font-medium cursor-pointer">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="month">Month</SelectItem>
-              <SelectItem value="week">Week</SelectItem>
-              <SelectItem value="day">Day</SelectItem>
-            </SelectContent>
-          </Select>
+          <ToggleGroup
+            type="single"
+            value={viewMode}
+            onValueChange={(v) => { if (v) onViewModeChange(v as ViewMode); }}
+            variant="outline"
+            size="sm"
+            aria-label="Calendar view"
+          >
+            <ToggleGroupItem value="month" aria-label="Month view">Month</ToggleGroupItem>
+            <ToggleGroupItem value="week" aria-label="Week view">Week</ToggleGroupItem>
+            <ToggleGroupItem value="day" aria-label="Day view">Day</ToggleGroupItem>
+          </ToggleGroup>
 
-          <div className="w-px h-7 bg-border/60 mx-1" />
+          <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-7" />
 
           {(failedCount ?? 0) > 0 && (
             <Button
               size="sm"
               variant="destructive"
-              className="h-9 px-4 rounded-lg text-[13px] font-semibold cursor-pointer gap-1.5"
+              className="gap-1.5"
               onClick={onOpenFailed}
             >
-              <IconChevronLeft className="size-0 hidden" />{/* spacer for import */}
-              ⚠️ Failed Events
-              <span className="bg-white/20 text-white text-[11px] font-bold px-1.5 py-0.5 rounded-md ml-0.5">
+              <IconAlertTriangle className="size-4" aria-hidden />
+              <span className="hidden sm:inline">Failed events</span>
+              <span className="ml-0.5 rounded-md bg-primary-foreground/20 px-1.5 py-0.5 text-2xs font-semibold tabular-nums">
                 {failedCount}
               </span>
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 rounded-lg cursor-pointer"
-            onClick={() => setShowStatusLegend(true)}
-            title="Event status legend"
-          >
-            <IconInfoCircle className="size-[18px]" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon-sm" onClick={() => setShowStatusLegend(true)} aria-label="Event status legend">
+                <IconInfoCircle />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Event status legend</TooltipContent>
+          </Tooltip>
 
-          <Button
-            size="sm"
-            className="h-9 px-4 rounded-lg text-[13px] font-semibold cursor-pointer"
-            onClick={onAddEvent}
-          >
-            + Add event
+          <Button size="sm" onClick={onAddEvent}>
+            <IconPlus className="size-4" aria-hidden />
+            <span className="hidden sm:inline">Add event</span>
+            <span className="sr-only sm:hidden">Add event</span>
           </Button>
         </div>
       </div>
 
       {/* ── Calendar card ───────────────────────────────────────────── */}
-      <div className="rounded-xl border bg-card overflow-hidden shadow-sm flex-1 min-h-0 flex flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-card">
         {/* Weekday header — month view only */}
         {viewMode === "month" && (
-          <div className="grid grid-cols-7 border-b bg-muted/30">
+          <div className="hidden grid-cols-7 border-b border-line bg-surface-2 sm:grid">
             {WEEKDAYS.map((day) => (
-              <div
-                key={day}
-                className="py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 border-r last:border-r-0"
-              >
+              <div key={day} className="eyebrow border-r border-line py-2.5 text-center last:border-r-0">
                 {day}
               </div>
             ))}
@@ -1430,16 +1487,13 @@ export function CustomMonthAgenda({
 
         {/* Loading skeleton */}
         {loading && (
-          <div className="grid grid-cols-7 flex-1 min-h-0 overflow-auto">
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto sm:grid-cols-7" aria-busy="true" aria-label="Loading calendar">
             {Array.from({ length: 35 }).map((_, i) => (
-              <div
-                key={i}
-                className="min-h-[108px] border-r border-b p-1.5 animate-pulse"
-              >
-                <div className="h-4 w-4 bg-muted rounded-full mb-2" />
+              <div key={i} className="min-h-[108px] border-r border-b border-line p-1.5">
+                <Skeleton className="mb-2 size-4 rounded-full" />
                 <div className="space-y-1">
-                  <div className="h-4 bg-muted rounded" />
-                  <div className="h-4 bg-muted rounded w-3/4" />
+                  <Skeleton className="h-4" />
+                  <Skeleton className="h-4 w-3/4" />
                 </div>
               </div>
             ))}
@@ -1448,24 +1502,39 @@ export function CustomMonthAgenda({
 
         {/* Month view */}
         {!loading && viewMode === "month" && (
-          <div className="flex flex-col flex-1 min-h-0 overflow-auto">
-            {weeks.map((week, wi) => (
-              <div key={wi} className="grid grid-cols-7">
-                {week.map((day, di) => (
-                  <DayCell
-                    key={di}
-                    day={day}
-                    events={calendarEvents}
-                    isCurrentMonth={isSameMonth(day, currentDate)}
-                    isToday={isToday(day)}
-                    onEventClick={handleEventClick}
-                    onDayClick={onDayClick}
-                    onEventDrop={onEventDrop}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
+          <>
+            {/* A seven-column grid is unreadable on a phone, so the same month
+                reads as a day list until there is room for the grid. */}
+            <div className="min-h-0 flex-1 overflow-auto sm:hidden">
+              <MonthDayList
+                days={weeks.flat()}
+                events={calendarEvents}
+                currentDate={currentDate}
+                onEventClick={handleEventClick}
+                onDayClick={onDayClick}
+                onAddEvent={onAddEvent}
+              />
+            </div>
+
+            <div className="hidden min-h-0 flex-1 flex-col overflow-auto sm:flex">
+              {weeks.map((week, wi) => (
+                <div key={wi} className="grid grid-cols-7">
+                  {week.map((day, di) => (
+                    <DayCell
+                      key={di}
+                      day={day}
+                      events={calendarEvents}
+                      isCurrentMonth={isSameMonth(day, currentDate)}
+                      isToday={isToday(day)}
+                      onEventClick={handleEventClick}
+                      onDayClick={onDayClick}
+                      onEventDrop={onEventDrop}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </>
         )}
 
         {/* Week view */}
@@ -1509,7 +1578,7 @@ export function CustomMonthAgenda({
 
             {/* Lifecycle group */}
             <div className="flex flex-col gap-1">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1.5">
+              <p className="text-2xs font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1.5">
                 Lifecycle
               </p>
               {(["scheduled", "queued", "running", "auto_retry", "stale_recovery", "succeeded"] as const).map((key) => {
@@ -1530,7 +1599,7 @@ export function CustomMonthAgenda({
                       <div className="flex items-center gap-2 mb-0.5">
                         <StatusGuideLabel statusKey={item.key} label={item.label} />
                       </div>
-                      <p className="text-[11px] leading-snug text-muted-foreground">{item.desc}</p>
+                      <p className="text-2xs leading-snug text-muted-foreground">{item.desc}</p>
                     </div>
                   </div>
                 );
@@ -1539,7 +1608,7 @@ export function CustomMonthAgenda({
 
             {/* Action needed group */}
             <div className="flex flex-col gap-1">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1.5">
+              <p className="text-2xs font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1.5">
                 Action Needed
               </p>
               {(["needs_retry", "failed"] as const).map((key) => {
@@ -1559,7 +1628,7 @@ export function CustomMonthAgenda({
                       <div className="flex items-center gap-2 mb-0.5">
                         <StatusGuideLabel statusKey={item.key} label={item.label} />
                       </div>
-                      <p className="text-[11px] leading-snug text-muted-foreground">{item.desc}</p>
+                      <p className="text-2xs leading-snug text-muted-foreground">{item.desc}</p>
                     </div>
                   </div>
                 );
@@ -1568,7 +1637,7 @@ export function CustomMonthAgenda({
 
             {/* Inactive group */}
             <div className="flex flex-col gap-1">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1.5">
+              <p className="text-2xs font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1.5">
                 Inactive
               </p>
               {(["cancelled", "skipped", "draft"] as const).map((key) => {
@@ -1588,7 +1657,7 @@ export function CustomMonthAgenda({
                       <div className="flex items-center gap-2 mb-0.5">
                         <StatusGuideLabel statusKey={item.key} label={item.label} />
                       </div>
-                      <p className="text-[11px] leading-snug text-muted-foreground">{item.desc}</p>
+                      <p className="text-2xs leading-snug text-muted-foreground">{item.desc}</p>
                     </div>
                   </div>
                 );

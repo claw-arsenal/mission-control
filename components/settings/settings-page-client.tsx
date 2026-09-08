@@ -43,6 +43,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import { ModulesSection } from "@/components/settings/modules-section";
 import { SectionHeading, SettingRow } from "@/components/settings/setting-row";
 import { ReviewNotificationsSection } from "@/components/settings/review-notifications-section";
@@ -107,7 +110,12 @@ export function SettingsPageClient(): React.ReactNode {
   const isAdmin = authRole === "admin";
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  const [activeSection, setActiveSection] = useState<SectionKey>("appearance");
+  // A link such as /settings#modules opens that section directly.
+  const [activeSection, setActiveSection] = useState<SectionKey>(() => {
+    if (typeof window === "undefined") return "appearance";
+    const fromHash = window.location.hash.replace("#", "");
+    return BASE_NAV_ITEMS.some((item) => item.key === fromHash) ? (fromHash as SectionKey) : "appearance";
+  });
   const [agendaTimeStepMinutes, setAgendaTimeStepMinutes] = useState(15);
   const [accentPickerOpen, setAccentPickerOpen] = useState(false);
   const [accentId, setAccentId] = useState("purple");
@@ -353,7 +361,7 @@ export function SettingsPageClient(): React.ReactNode {
 
       <div className="rounded-xl border bg-card p-6">
         <p className="text-sm font-medium mb-1">Theme</p>
-        <p className="text-[13px] text-muted-foreground mb-5">Select your preferred color scheme.</p>
+        <p className="text-sm text-muted-foreground mb-5">Select your preferred color scheme.</p>
 
         <div className="grid grid-cols-3 gap-3">
           {themeOptions.map((option) => {
@@ -447,50 +455,33 @@ export function SettingsPageClient(): React.ReactNode {
           label="Enable notifications"
           description="Toast alerts for completions, failures, and approvals"
         >
-          <button
-            type="button"
-            onClick={() => {
-              const next = !notifEnabled;
+          <Switch
+            id="setting-notifications-enabled"
+            aria-label="Enable notifications"
+            checked={notifEnabled}
+            onCheckedChange={(next) => {
               setNotifEnabled(next);
               saveNotificationSettings({ enabled: next, sound: notifSound });
               toast.success(next ? "Notifications enabled" : "Notifications disabled");
             }}
-            className={[
-              "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-              notifEnabled ? "bg-primary" : "bg-muted",
-            ].join(" ")}
-          >
-            <span className={[
-              "pointer-events-none inline-block size-5 rounded-full bg-white shadow-lg ring-0 transition-transform",
-              notifEnabled ? "translate-x-5" : "translate-x-0",
-            ].join(" ")} />
-          </button>
+          />
         </SettingRow>
 
         <SettingRow
           label="Sound"
           description="Play a chime when notifications appear"
         >
-          <button
-            type="button"
-            onClick={() => {
-              if (!notifEnabled) return;
-              const next = !notifSound;
+          <Switch
+            id="setting-notification-sound"
+            aria-label="Play a chime when notifications appear"
+            checked={notifSound && notifEnabled}
+            disabled={!notifEnabled}
+            onCheckedChange={(next) => {
               setNotifSound(next);
               saveNotificationSettings({ enabled: notifEnabled, sound: next });
               toast.success(next ? "Sound enabled" : "Sound disabled");
             }}
-            className={[
-              "relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors",
-              !notifEnabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
-              notifSound && notifEnabled ? "bg-primary" : "bg-muted",
-            ].join(" ")}
-          >
-            <span className={[
-              "pointer-events-none inline-block size-5 rounded-full bg-white shadow-lg ring-0 transition-transform",
-              notifSound && notifEnabled ? "translate-x-5" : "translate-x-0",
-            ].join(" ")} />
-          </button>
+          />
         </SettingRow>
       </div>
 
@@ -547,11 +538,11 @@ export function SettingsPageClient(): React.ReactNode {
         <p className="text-sm font-medium mb-3">Retry flow</p>
         <div className="space-y-2.5">
           <div className="flex items-start gap-3">
-            <div className="flex items-center justify-center size-6 rounded-full bg-blue-500/10 text-blue-500 text-xs font-bold shrink-0 mt-0.5">1</div>
+            <div className="flex items-center justify-center size-6 rounded-full bg-info-soft text-blue-500 text-xs font-bold shrink-0 mt-0.5">1</div>
             <p className="text-sm text-muted-foreground">Mission Control stores a retry-attempt limit of <span className="font-medium text-foreground">{maxRetries} attempt{maxRetries === 1 ? "" : "s"}</span> for agenda retry policy and diagnostics.</p>
           </div>
           <div className="flex items-start gap-3">
-            <div className="flex items-center justify-center size-6 rounded-full bg-red-500/10 text-red-500 text-xs font-bold shrink-0 mt-0.5">2</div>
+            <div className="flex items-center justify-center size-6 rounded-full bg-danger-soft text-red-500 text-xs font-bold shrink-0 mt-0.5">2</div>
             <p className="text-sm text-muted-foreground">All retries exhausted → marked <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">needs_retry</code> + Telegram alert.</p>
           </div>
         </div>
@@ -620,13 +611,13 @@ export function SettingsPageClient(): React.ReactNode {
       {updateInfo && (
         <div className="mt-4">
           {updateInfo.behind === 0 ? (
-            <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4 text-sm text-emerald-700 dark:text-emerald-400">
+            <div className="flex items-center gap-3 rounded-xl border border-success/30 bg-success-soft px-5 py-4 text-sm text-success-fg">
               <IconCircleCheck className="size-5 shrink-0" />
               <span className="font-medium">You&apos;re up to date</span>
             </div>
           ) : (
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4">
-              <div className="flex items-center gap-3 text-sm text-amber-700 dark:text-amber-400">
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-warning/30 bg-warning-soft px-5 py-4">
+              <div className="flex items-center gap-3 text-sm text-warning-fg">
                 <IconAlertTriangle className="size-5 shrink-0" />
                 <div>
                   <span className="font-medium">
@@ -697,35 +688,24 @@ export function SettingsPageClient(): React.ReactNode {
           label="Developer mode"
           description="Enables test panels on the Agenda and Boards pages. Stored in localStorage — toggle off to return to normal view."
         >
-          <button
-            type="button"
-            role="switch"
-            aria-checked={devModeEnabled}
-            onClick={() => {
-              setDevMode(!devModeEnabled);
-              toast(devModeEnabled ? "Developer mode disabled" : "Developer mode enabled", {
-                description: devModeEnabled
-                  ? "Test panels are now hidden."
-                  : "Test panels are now visible on Agenda and Boards.",
+          <Switch
+            id="setting-developer-mode"
+            aria-label="Developer mode"
+            checked={devModeEnabled}
+            onCheckedChange={(next) => {
+              setDevMode(next);
+              toast(next ? "Developer mode enabled" : "Developer mode disabled", {
+                description: next
+                  ? "Test panels are now visible on Agenda and Boards."
+                  : "Test panels are now hidden.",
               });
             }}
-            className={[
-              "relative inline-flex h-6 w-11 cursor-pointer items-center rounded-full transition-colors",
-              devModeEnabled ? "bg-primary" : "bg-input",
-            ].join(" ")}
-          >
-            <span
-              className={[
-                "inline-block size-4 rounded-full bg-white shadow-sm transition-transform",
-                devModeEnabled ? "translate-x-6" : "translate-x-1",
-              ].join(" ")}
-            />
-          </button>
+          />
         </SettingRow>
         {devModeEnabled && (
           <div className="px-5 py-4 flex items-start gap-3 bg-primary/5 rounded-b-xl">
             <IconFlask className="size-4 text-primary mt-0.5 shrink-0" />
-            <p className="text-[13px] text-muted-foreground leading-relaxed">
+            <p className="text-sm text-muted-foreground leading-relaxed">
               <span className="font-semibold text-foreground">Developer mode is active.</span>{" "}
               Test panels are visible on the <strong>Agenda</strong> and <strong>Boards</strong> pages.
             </p>
@@ -751,76 +731,54 @@ export function SettingsPageClient(): React.ReactNode {
 
   const NAV_ITEMS = BASE_NAV_ITEMS.filter((item) => item.key !== "danger" || isAdmin);
 
+  // A section chosen here is reflected in the URL hash, so the choice survives a
+  // refresh and links such as /settings#modules land in the right place.
+  const selectSection = (key: SectionKey) => {
+    setActiveSection(key);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#${key}`);
+    }
+  };
+
   return (
-    <div className="flex flex-1 flex-col px-4 py-6 sm:px-6 lg:px-8">
-      {/* Page header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground mt-1">Manage preferences and system configuration</p>
-      </div>
+    <div className="page-x flex flex-1 flex-col py-(--page-y)">
+      <p className="sr-only" id="settings-intro">Manage preferences and system configuration.</p>
 
-      {/* Mobile nav — horizontal pills */}
-      <div className="flex sm:hidden gap-2 mb-6 overflow-x-auto pb-1 -mx-1 px-1">
-        {NAV_ITEMS.map((item) => {
-          const Icon = item.icon;
-          const isActive = activeSection === item.key;
-          return (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setActiveSection(item.key)}
-              className={[
-                "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0",
-                isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-accent/60 text-muted-foreground hover:bg-accent",
-              ].join(" ")}
-            >
-              <Icon className="size-4" />
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        value={activeSection}
+        onValueChange={(value) => selectSection(value as SectionKey)}
+        orientation="vertical"
+        className="flex min-h-0 flex-1 flex-col gap-6 sm:flex-row sm:gap-10"
+      >
+        {/* Horizontal on phones, a rail beside the content from sm up */}
+        <TabsList className="mc-scrollbar h-auto w-full justify-start gap-1 overflow-x-auto rounded-full bg-surface-2 p-1 sm:sticky sm:top-6 sm:w-52 sm:shrink-0 sm:flex-col sm:items-stretch sm:self-start sm:rounded-xl sm:bg-transparent sm:p-0">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <TabsTrigger
+                key={item.key}
+                value={item.key}
+                className={cn(
+                  "shrink-0 justify-start gap-2 rounded-full px-3 py-2 text-sm font-medium whitespace-nowrap sm:rounded-lg sm:py-2.5",
+                  "data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none",
+                  item.key === "danger" && "data-[state=inactive]:hover:text-destructive",
+                )}
+              >
+                <Icon className="size-4 shrink-0" />
+                {item.label}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
 
-      {/* Two-column layout */}
-      <div className="flex gap-12 flex-1 min-h-0">
-        {/* Sidebar nav */}
-        <nav className="hidden sm:flex flex-col w-52 shrink-0">
-          <div className="flex flex-col gap-1 sticky top-6">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeSection === item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setActiveSection(item.key)}
-                  className={[
-                    "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer text-left",
-                    isActive
-                      ? "bg-primary/10 text-primary"
-                      : item.key === "danger"
-                        ? "text-muted-foreground hover:text-destructive hover:bg-destructive/5"
-                        : "text-muted-foreground hover:text-foreground hover:bg-accent/50",
-                  ].join(" ")}
-                >
-                  <Icon className={[
-                    "size-[18px] shrink-0",
-                    isActive ? "text-primary" : "",
-                  ].join(" ")} />
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-        </nav>
-
-        {/* Content area */}
-        <div className="flex-1 min-w-0 max-w-2xl pb-12">
-          {activeSection === "danger" && !isAdmin ? null : sections[activeSection]()}
+        <div className="min-w-0 flex-1 pb-12 sm:max-w-2xl">
+          {NAV_ITEMS.map((item) => (
+            <TabsContent key={item.key} value={item.key} className="m-0">
+              {item.key === "danger" && !isAdmin ? null : sections[item.key]()}
+            </TabsContent>
+          ))}
         </div>
-      </div>
+      </Tabs>
 
       <Dialog open={accentPickerOpen} onOpenChange={setAccentPickerOpen}>
         <DialogContent className="sm:max-w-3xl">
@@ -849,7 +807,7 @@ export function SettingsPageClient(): React.ReactNode {
                 <div key={label}>
                   <div className="flex items-center gap-2 mb-3">
                     <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
-                    <span className="text-[10px] text-muted-foreground/60">({group.length})</span>
+                    <span className="text-2xs text-muted-foreground/60">({group.length})</span>
                   </div>
                   <div className="grid grid-cols-6 sm:grid-cols-10 gap-2">
                     {group.map((accent) => {
@@ -878,7 +836,7 @@ export function SettingsPageClient(): React.ReactNode {
                             ].join(" ")}
                             style={{ backgroundColor: accent.swatch }}
                           />
-                          <span className="text-[9px] text-center leading-tight text-muted-foreground group-hover:text-foreground truncate w-full px-0.5">
+                          <span className="text-2xs text-center leading-tight text-muted-foreground group-hover:text-foreground truncate w-full px-0.5">
                             {accent.label}
                           </span>
                         </button>

@@ -13,9 +13,9 @@ type Props = {
 };
 
 function scoreTone(score: number): { label: string; cls: string } {
-  if (score >= 0.25) return { label: "Positive", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
+  if (score >= 0.25) return { label: "Positive", cls: "bg-success-soft text-success-fg" };
   if (score <= -0.25) return { label: "Negative", cls: "bg-red-500/15 text-red-700 dark:text-red-400" };
-  return { label: "Mixed", cls: "bg-amber-500/15 text-amber-700 dark:text-amber-500" };
+  return { label: "Mixed", cls: "bg-warning-soft text-warning-fg dark:text-warning" };
 }
 
 export function SentimentDigest({ summaryMd, createdAt, busy, onGenerate }: Props) {
@@ -41,7 +41,7 @@ export function SentimentDigest({ summaryMd, createdAt, busy, onGenerate }: Prop
         <div className="space-y-3.5">
           <div className="flex items-start gap-2.5">
             {d.score != null ? (
-              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${scoreTone(d.score).cls}`}>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold ${scoreTone(d.score).cls}`}>
                 {scoreTone(d.score).label} {d.score > 0 ? `+${d.score.toFixed(1)}` : d.score.toFixed(1)}
               </span>
             ) : null}
@@ -67,12 +67,12 @@ export function SentimentDigest({ summaryMd, createdAt, busy, onGenerate }: Prop
           {d.praise.length > 0 ? (
             <div>
               <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                <IconThumbUp className="size-3.5 text-emerald-500" /> Top praise
+                <IconThumbUp className="size-3.5 text-success" /> Top praise
               </div>
               <ul className="space-y-1">
                 {d.praise.slice(0, 5).map((c, i) => (
                   <li key={i} className="flex gap-2 text-sm text-foreground/80">
-                    <span className="mt-1.5 size-1 shrink-0 rounded-full bg-emerald-500/70" />
+                    <span className="mt-1.5 size-1 shrink-0 rounded-full bg-success/70" />
                     {c}
                   </li>
                 ))}
@@ -91,7 +91,7 @@ export function SentimentDigest({ summaryMd, createdAt, busy, onGenerate }: Prop
           ) : null}
 
           {createdAt ? (
-            <p className="text-[11px] text-muted-foreground/70">Generated {formatDate(createdAt)}</p>
+            <p className="text-2xs text-muted-foreground/70">Generated {formatDate(createdAt)}</p>
           ) : null}
         </div>
       )}

@@ -31,12 +31,12 @@ This is a discussion doc, not a spec. Each recommended item still needs its own 
 ### List (column) level
 | Feature | MC status | Notes |
 |---|---|---|
-| Create / rename / colour list | ✅ | |
+| Create / rename / colour list | ✅ | Rename is inline (double-click the title or list menu) |
 | Reorder lists | ✅ | dnd-kit drag |
 | Archive list | ❌ | Hard delete only |
 | Watch list (subscribe) | ❌ | No per-user watch state |
 | Move all cards in list | ❌ | No bulk-move affordance |
-| Sort list (manual / by due / by priority) | 🟡 | Whole-board sort exists (`sort` state in useTasks), no per-list sort |
+| Sort list (manual / by due / by priority) | 🟡 | Whole-board sort exists (`sort` state in useTasks), no per-list sort. Lists can be collapsed (remembered per board). |
 | WIP limits per list | ❌ | No limit / no warning indicator |
 
 ### Card (ticket) level
@@ -72,9 +72,9 @@ This is a discussion doc, not a spec. Each recommended item still needs its own 
 | Filter by member | ✅ | **Item #7 — just shipped** |
 | Filter by label / tag | ❌ | Tag-search exists via free-text search, no dedicated filter chip |
 | Filter by due date / overdue | ❌ | Sort by due exists; filter does not |
-| Quick add card (from anywhere) | ❌ | Must navigate to a board first |
-| Keyboard shortcuts (`?` menu, `n` to add card, etc.) | ❌ | None |
-| Per-column pagination / virtualization | ✅ | **Item #8 — just shipped (Show more after 25)** |
+| Quick add card (from anywhere) | 🟡 | Inline composer at the foot of every list (`n` opens it); no global quick-add yet |
+| Keyboard shortcuts (`?` menu, `n` to add card, etc.) | ✅ | `n`, `/`, `?` plus dnd-kit keyboard dragging; reference dialog on `?` |
+| Per-column pagination / virtualization | ✅ | Progressive reveal: 25 cards per page, more as the list scrolls (`useProgressiveList`) |
 | Saved filters / per-user views | ❌ | All filter state is in-memory |
 | Multi-board search | ❌ | Search is scoped to the active board |
 | Drag-to-board navigation | ❌ | No drag from sidebar to a board |

@@ -63,7 +63,7 @@ export function NavUser({ user, onLogout }: { user: User; onLogout: () => void }
           </DropdownMenuTrigger>
           <DropdownMenuContent
             id={contentId}
-            className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
+            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
             side={isMobile ? "bottom" : "right"}
             align="end"
             sideOffset={4}

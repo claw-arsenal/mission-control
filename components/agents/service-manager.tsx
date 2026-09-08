@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ContainerLoader } from "@/components/ui/container-loader";
 import {
   Dialog,
@@ -30,28 +32,28 @@ type ServiceInfo = {
 function ServiceStatusBadge({ status, pidAlive }: { status: string; pidAlive: boolean }): React.ReactElement {
   const effectiveStatus = pidAlive ? status : (status === "running" ? "stopped" : status);
   const map: Record<string, { label: string; className: string }> = {
-    running: { label: "Running", className: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" },
-    stopped: { label: "Stopped", className: "bg-gray-500/10 text-gray-500 border-gray-500/20" },
+    running: { label: "Running", className: "bg-success-soft text-success-fg border-success/20" },
+    stopped: { label: "Stopped", className: "bg-surface-2 text-muted-foreground border-line" },
     error: { label: "Error", className: "bg-red-500/10 text-red-600 border-red-500/20" },
-    unknown: { label: "Unknown", className: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20" },
+    unknown: { label: "Unknown", className: "bg-warning-soft text-warning-fg border-yellow-500/20" },
   };
   const cfg = map[effectiveStatus] ?? map.unknown;
   return (
     <Badge variant="outline" className={`gap-1.5 ${cfg.className}`}>
       {effectiveStatus === "running" && (
         <span className="relative flex size-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-          <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+          <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-success opacity-75" />
+          <span className="relative inline-flex size-2 rounded-full bg-success" />
         </span>
       )}
       {effectiveStatus === "error" && (
         <span className="relative flex size-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+          <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-red-400 opacity-75" />
           <span className="relative inline-flex size-2 rounded-full bg-red-500" />
         </span>
       )}
       {effectiveStatus === "stopped" && (
-        <span className="inline-flex size-2 rounded-full bg-gray-400" />
+        <span className="inline-flex size-2 rounded-full bg-muted-foreground/60" />
       )}
       {cfg.label}
     </Badge>
@@ -73,20 +75,27 @@ export function ServiceManager(): React.ReactElement {
   const mountedRef = useRef(false);
   const [services, setServices] = useState<ServiceInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState<Set<string>>(new Set());
   const [logDialog, setLogDialog] = useState<{ open: boolean; service: string; logs: string }>({
     open: false, service: "", logs: "",
   });
 
   const fetchServices = useCallback(async () => {
+    setLoading(true);
     try {
       const res = await fetch("/api/services", { cache: "reload" });
+      if (!res.ok) throw new Error(`The services request failed (${res.status}).`);
       const json = await res.json();
-      if (json.ok) {
-        setServices(json.services ?? []);
-      }
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+      if (!json.ok) throw new Error(typeof json.error === "string" ? json.error : "The service list could not be read.");
+      setServices(json.services ?? []);
+      setError(null);
+    } catch (err) {
+      // Without this the list sits on "Loading services" forever.
+      setError(err instanceof Error ? err.message : "The service list could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -176,7 +185,7 @@ export function ServiceManager(): React.ReactElement {
                 {svc.pid && <div>PID: {svc.pid} {svc.pidAlive ? "✓" : "✗"}</div>}
                 <div>Heartbeat: {formatTime(svc.lastHeartbeatAt)}</div>
                 {svc.lastError && (
-                  <div className="text-red-500 truncate" title={svc.lastError}>
+                  <div className="text-danger-fg truncate" title={svc.lastError}>
                     Error: {svc.lastError.slice(0, 80)}
                   </div>
                 )}
@@ -226,9 +235,24 @@ export function ServiceManager(): React.ReactElement {
           </motion.div>
         ))}
 
-        {services.length === 0 && (
-          <div className="col-span-full text-center py-12 text-muted-foreground text-sm">
-            Loading services...
+        {services.length === 0 && !loading && (
+          <div className="col-span-full">
+            {error ? (
+              <Alert variant="destructive">
+                <AlertTitle>Services could not be loaded</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+                <AlertActions>
+                  <Button size="sm" variant="outline" onClick={() => void fetchServices()}>Try again</Button>
+                </AlertActions>
+              </Alert>
+            ) : (
+              <Empty className="border-line bg-surface-2/60">
+                <EmptyHeader>
+                  <EmptyTitle>No services registered</EmptyTitle>
+                  <EmptyDescription>Background services appear here once the runtime reports them.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
           </div>
         )}
       </div>

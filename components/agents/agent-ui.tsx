@@ -11,16 +11,21 @@ import type {
   AgentStatus,
 } from "@/types/agents";
 
+/**
+ * One status vocabulary for every agent badge. Severity uses the status tokens;
+ * identity (log type, channel, direction) uses the chart hues, which are the
+ * palette reserved for telling categories apart.
+ */
 const statusClass: Record<AgentStatus, string> = {
-  running: "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  idle: "border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  degraded: "border-destructive/40 bg-destructive/15 text-destructive",
+  running: "border-success/40 bg-success-soft text-success-fg",
+  idle: "border-warning/40 bg-warning-soft text-warning-fg",
+  degraded: "border-danger/40 bg-danger-soft text-danger-fg",
 };
 
 const levelClass: Record<AgentLogLevel, string> = {
-  info: "border-sky-500/40 bg-sky-500/15 text-sky-700 dark:text-sky-300",
-  debug: "border-zinc-500/40 bg-zinc-500/15 text-zinc-700 dark:text-zinc-300",
-  warning: "border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  info: "border-info/40 bg-info-soft text-info-fg",
+  debug: "border-line-strong bg-surface-2 text-muted-foreground",
+  warning: "border-warning/40 bg-warning-soft text-warning-fg",
   error: "",
 };
 
@@ -32,53 +37,53 @@ const levelVariant: Record<AgentLogLevel, "outline" | "destructive"> = {
 };
 
 const typeClass: Record<AgentLogType, string> = {
-  workflow: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-  tool: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  memory: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300",
-  system: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
-  worker: "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300",
-  cron: "border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
+  workflow: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  tool: "border-chart-3/30 bg-chart-3/10 text-chart-3",
+  memory: "border-chart-4/30 bg-chart-4/10 text-chart-4",
+  system: "border-line-strong bg-surface-2 text-muted-foreground",
+  worker: "border-chart-1/30 bg-chart-1/10 text-chart-1",
+  cron: "border-chart-5/30 bg-chart-5/10 text-chart-5",
 };
 
 const eventTypeClass: Record<AgentLogEventType, string> = {
-  "chat.user_in": "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  "chat.assistant_out": "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  "chat.reaction": "border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300",
-  "tool.start": "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  "tool.success": "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-300",
-  "tool.error": "border-destructive/30 bg-destructive/10 text-destructive",
-  "system.startup": "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300",
-  "system.shutdown": "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
-  "system.error": "border-destructive/30 bg-destructive/10 text-destructive",
-  "system.warning": "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  "heartbeat.tick": "border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300",
-  "heartbeat.status_change": "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300",
-  "memory.read": "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-  "memory.write": "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300",
-  "memory.search": "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
-  "memory.upsert": "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-300",
-  "memory.error": "border-destructive/30 bg-destructive/10 text-destructive",
+  "chat.user_in": "border-chart-1/30 bg-chart-1/10 text-chart-1",
+  "chat.assistant_out": "border-chart-3/30 bg-chart-3/10 text-chart-3",
+  "chat.reaction": "border-chart-5/30 bg-chart-5/10 text-chart-5",
+  "tool.start": "border-chart-3/30 bg-chart-3/10 text-chart-3",
+  "tool.success": "border-success/30 bg-success-soft text-success-fg",
+  "tool.error": "border-danger/30 bg-danger-soft text-danger-fg",
+  "system.startup": "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  "system.shutdown": "border-line-strong bg-surface-2 text-muted-foreground",
+  "system.error": "border-danger/30 bg-danger-soft text-danger-fg",
+  "system.warning": "border-warning/30 bg-warning-soft text-warning-fg",
+  "heartbeat.tick": "border-line-strong bg-surface-2 text-muted-foreground",
+  "heartbeat.status_change": "border-chart-1/30 bg-chart-1/10 text-chart-1",
+  "memory.read": "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  "memory.write": "border-chart-4/30 bg-chart-4/10 text-chart-4",
+  "memory.search": "border-chart-5/30 bg-chart-5/10 text-chart-5",
+  "memory.upsert": "border-chart-4/30 bg-chart-4/10 text-chart-4",
+  "memory.error": "border-danger/30 bg-danger-soft text-danger-fg",
 };
 
 const channelTypeClass: Record<AgentLogChannelType, string> = {
-  internal: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
-  telegram: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  gateway: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300",
-  qdrant: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
+  internal: "border-line-strong bg-surface-2 text-muted-foreground",
+  telegram: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  gateway: "border-chart-3/30 bg-chart-3/10 text-chart-3",
+  qdrant: "border-chart-5/30 bg-chart-5/10 text-chart-5",
 };
 
 const directionClass: Record<AgentLogDirection, string> = {
-  inbound: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-  outbound: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  internal: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
+  inbound: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  outbound: "border-chart-3/30 bg-chart-3/10 text-chart-3",
+  internal: "border-line-strong bg-surface-2 text-muted-foreground",
 };
 
 const memorySourceClass: Record<Exclude<AgentLogMemorySource, "">, string> = {
-  session: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-  daily_file: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300",
-  long_term_file: "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-300",
-  episodic_file: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-300",
-  qdrant_vector: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
+  session: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  daily_file: "border-chart-4/30 bg-chart-4/10 text-chart-4",
+  long_term_file: "border-chart-1/30 bg-chart-1/10 text-chart-1",
+  episodic_file: "border-chart-5/30 bg-chart-5/10 text-chart-5",
+  qdrant_vector: "border-chart-3/30 bg-chart-3/10 text-chart-3",
 };
 
 const levelLabel: Record<AgentLogLevel, string> = {
@@ -255,5 +260,5 @@ export function formatTimestamp(value: string | null | undefined) {
   if (!value) return "Never";
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
-  return AMSTERDAM_FORMATTER.format(date).replace(" ", " ").replace(" at ", ", ");
+  return AMSTERDAM_FORMATTER.format(date).replace(/\u202f/g, " ").replace(" at ", ", ");
 }

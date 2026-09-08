@@ -1,12 +1,15 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { ArrowRightIcon, ActivityIcon, CpuIcon, BrainCircuitIcon, ZapIcon } from "lucide-react";
+import { ArrowRightIcon, ActivityIcon, ClipboardListIcon, CodeIcon, CpuIcon, BrainCircuitIcon, FlaskConicalIcon, PenLineIcon, SearchIcon, ZapIcon, type LucideIcon } from "lucide-react";
 import { AgentDebugOverlay } from "@/components/agents/agent-debug-overlay";
 import { AgentStatusBadge, formatAgentName } from "@/components/agents/agent-ui";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ContainerLoader } from "@/components/ui/container-loader";
 import type { Agent } from "@/types/agents";
@@ -23,36 +26,36 @@ type AgentEntry = {
 
 // ── Agent emoji/icon mapping ─────────────────────────────────────────────────
 
-const AGENT_EMOJIS: Record<string, string> = {
-  main: "🤖",
-  planner: "📋",
-  developer: "💻",
-  writer: "✍️",
-  researcher: "🔍",
-  test: "🧪",
-  default: "⚡",
-};
+/** A glyph per agent role. Icons render identically on every platform, unlike emoji. */
+const AGENT_ICONS: Array<[string, LucideIcon]> = [
+  ["main", CpuIcon],
+  ["planner", ClipboardListIcon],
+  ["developer", CodeIcon],
+  ["writer", PenLineIcon],
+  ["researcher", SearchIcon],
+  ["test", FlaskConicalIcon],
+];
 
-function getAgentEmoji(name: string, id: string): string {
+function getAgentIcon(name: string, id: string): LucideIcon {
   const lower = (name || id || "").toLowerCase();
-  for (const [key, emoji] of Object.entries(AGENT_EMOJIS)) {
-    if (lower.includes(key)) return emoji;
+  for (const [key, Icon] of AGENT_ICONS) {
+    if (lower.includes(key)) return Icon;
   }
-  return AGENT_EMOJIS.default;
+  return ZapIcon;
 }
 
 // ── Status gradient mapping ──────────────────────────────────────────────────
 
 const STATUS_GRADIENTS: Record<string, string> = {
-  running: "from-emerald-500/15 via-emerald-500/5 to-transparent",
+  running: "from-success/15 via-success/5 to-transparent",
   idle: "from-primary/8 via-primary/2 to-transparent",
-  degraded: "from-red-500/15 via-red-500/5 to-transparent",
+  degraded: "from-danger/15 via-danger/5 to-transparent",
 };
 
 const STATUS_GLOW: Record<string, string> = {
-  running: "shadow-emerald-500/10",
+  running: "shadow-elev-1",
   idle: "",
-  degraded: "shadow-red-500/10",
+  degraded: "shadow-elev-1",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -99,9 +102,9 @@ function AgentsPageSkeleton(): React.ReactElement {
 
 const STAT_CONFIGS = [
   { label: "Total agents", color: "text-primary", bg: "bg-primary/10", icon: CpuIcon },
-  { label: "Running", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10", icon: ActivityIcon },
-  { label: "Responses (1h)", color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500/10", icon: ZapIcon },
-  { label: "Memory ops (1h)", color: "text-fuchsia-600 dark:text-fuchsia-400", bg: "bg-fuchsia-500/10", icon: BrainCircuitIcon },
+  { label: "Running", color: "text-success-fg", bg: "bg-success-soft", icon: ActivityIcon },
+  { label: "Responses (1h)", color: "text-info-fg", bg: "bg-info-soft", icon: ZapIcon },
+  { label: "Memory ops (1h)", color: "text-muted-foreground", bg: "bg-surface-2", icon: BrainCircuitIcon },
 ] as const;
 
 // ── Main grid ────────────────────────────────────────────────────────────────
@@ -109,6 +112,7 @@ const STAT_CONFIGS = [
 function AgentsClientGrid({ showAgentDebug }: { showAgentDebug: boolean }): React.ReactElement | null {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const startedRef = useRef(false);
 
@@ -116,35 +120,55 @@ function AgentsClientGrid({ showAgentDebug }: { showAgentDebug: boolean }): Reac
     setMounted(true);
   }, []);
 
+  const loadAgents = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/agents", { cache: "no-cache" });
+      if (!res.ok) throw new Error(`The agent list request failed (${res.status}).`);
+      const json = await res.json();
+      setAgents(json.agents ?? []);
+      setError(null);
+    } catch (err) {
+      // A failed request must not read as "no agents online".
+      setError(err instanceof Error ? err.message : "The agent list could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    const load = async () => {
-      try {
-        const res = await fetch("/api/agents", { cache: "no-cache" });
-        const json = await res.json();
-        setAgents(json.agents ?? []);
-      } catch (err) {
-        console.error("Failed to load agents", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    void load();
-  }, []);
+    void loadAgents();
+  }, [loadAgents]);
 
   if (!mounted) return null;
-  if (loading) return <AgentsPageSkeleton />;
+  if (loading && agents.length === 0) return <AgentsPageSkeleton />;
+
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Agents could not be loaded</AlertTitle>
+        <AlertDescription>{error}</AlertDescription>
+        <AlertActions>
+          <Button size="sm" variant="outline" disabled={loading} onClick={() => void loadAgents()}>
+            {loading ? <Spinner className="size-3" /> : null}
+            Try again
+          </Button>
+        </AlertActions>
+      </Alert>
+    );
+  }
 
   if (agents.length === 0) {
     return (
-      <Empty className="min-h-72">
+      <Empty className="min-h-72 border-line bg-surface-2/60">
         <EmptyHeader>
-          <div className="text-6xl mb-4">🤖</div>
+          <CpuIcon className="mx-auto mb-2 size-8 text-muted-foreground/50" aria-hidden />
           <EmptyTitle>No agents online</EmptyTitle>
           <EmptyDescription>
-            Your agents will appear here once they connect. Start an agent to see it light up!
+            Agents appear here once they connect. Start an agent to see it listed.
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -156,7 +180,9 @@ function AgentsClientGrid({ showAgentDebug }: { showAgentDebug: boolean }): Reac
     (a) => resolveAgentCardStatus(a.status, a.lastHeartbeatAt, Date.now()) === "running",
   ).length;
 
-  const statValues = [agents.length, runningCount, "—", "—"];
+  // Response and memory counters are not collected yet; the tiles say so rather
+  // than showing a number that would be invented.
+  const statValues = [agents.length, runningCount, "Not tracked", "Not tracked"];
 
   return (
     <>
@@ -188,12 +214,12 @@ function AgentsClientGrid({ showAgentDebug }: { showAgentDebug: boolean }): Reac
           const cardStatus = resolveAgentCardStatus(agent.status, agent.lastHeartbeatAt, referenceTs);
           const gradient = STATUS_GRADIENTS[cardStatus] ?? STATUS_GRADIENTS.idle;
           const glow = STATUS_GLOW[cardStatus] ?? "";
-          const emoji = getAgentEmoji(agent.name, agent.id);
+          const AgentIcon = getAgentIcon(agent.name, agent.id);
           const isRunning = cardStatus === "running";
 
           return (
             <Link key={agent.id} href={`/agents/${encodeURIComponent(agent.id)}`} className="block group">
-              <Card className={`h-full overflow-hidden border transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-primary/40 ${glow}`}>
+              <Card className={`h-full overflow-hidden border transition-[transform,box-shadow,border-color] duration-(--dur-base) ease-(--ease-out) hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-elev-2 ${glow}`}>
                 {/* Gradient accent bar */}
                 <div className={`h-1.5 w-full bg-gradient-to-r ${gradient}`} />
 
@@ -202,14 +228,14 @@ function AgentsClientGrid({ showAgentDebug }: { showAgentDebug: boolean }): Reac
                     <div className="flex items-center gap-3">
                       {/* Agent avatar */}
                       <div className="relative">
-                        <div className="size-11 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/20 flex items-center justify-center text-xl">
-                          {emoji}
+                        <div className="flex size-11 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
+                          <AgentIcon className="size-5" aria-hidden />
                         </div>
                         {/* Pulse indicator for running agents */}
                         {isRunning && (
                           <span className="absolute -top-0.5 -right-0.5 flex size-3">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                            <span className="relative inline-flex rounded-full size-3 bg-emerald-500" />
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
+                            <span className="relative inline-flex rounded-full size-3 bg-success" />
                           </span>
                         )}
                       </div>
@@ -240,7 +266,7 @@ function AgentsClientGrid({ showAgentDebug }: { showAgentDebug: boolean }): Reac
                   {agent.isDefault && (
                     <div className="flex items-center justify-between">
                       <span className="text-muted-foreground">Role</span>
-                      <Badge variant="outline" className="text-[10px]">Default agent</Badge>
+                      <Badge variant="outline" className="text-2xs">Default agent</Badge>
                     </div>
                   )}
 

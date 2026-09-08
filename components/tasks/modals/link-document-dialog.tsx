@@ -9,12 +9,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
+  AlertTriangleIcon,
   FileIcon,
   FileTextIcon,
   FileCodeIcon,
@@ -70,30 +75,52 @@ export function LinkDocumentDialog({ open, ticketId, alreadyLinkedIds, onClose, 
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
   const [path, setPath] = useState("");
+  const [treeLoaded, setTreeLoaded] = useState(false);
+  const [treeError, setTreeError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const treeLoading = !treeLoaded && !treeError;
+
+  // Reset the form when the dialog opens, during render rather than in an
+  // effect so no synchronous setState runs from an effect body.
+  const [lastOpen, setLastOpen] = useState(open);
+  if (open !== lastOpen) {
+    setLastOpen(open);
+    if (open) {
+      setSelected(new Set());
+      setError("");
+      setTreeError("");
+      setTab("documents");
+      setUrl("");
+      setLabel("");
+      setPath("");
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
-    setSelected(new Set());
-    setError("");
-    setTab("documents");
-    setUrl("");
-    setLabel("");
-    setPath("");
+    let cancelled = false;
     void (async () => {
       try {
         const [tree, recent] = await Promise.all([
           fetch("/api/documents").then((r) => r.json()),
           fetch("/api/documents?recent=1&limit=200").then((r) => r.json()),
         ]);
+        if (cancelled) return;
         if (tree.ok) setEntries(tree.entries || []);
         if (recent.ok) {
           const map: Record<string, string> = {};
           for (const r of recent.recent || []) map[r.relative_path] = r.id;
           setIdsByPath(map);
         }
-      } catch { /* ignore */ }
+        setTreeError(tree.ok ? "" : tree.error || "The document list did not load.");
+      } catch {
+        if (!cancelled) setTreeError("Could not reach the server.");
+      } finally {
+        if (!cancelled) setTreeLoaded(true);
+      }
     })();
-  }, [open]);
+    return () => { cancelled = true; };
+  }, [open, reloadKey]);
 
   const childrenByParent = useMemo(() => {
     const out: Record<string, DirEntry[]> = { "": [] };
@@ -253,56 +280,87 @@ export function LinkDocumentDialog({ open, ticketId, alreadyLinkedIds, onClose, 
               />
             </div>
 
-            <ScrollArea className="h-[320px] rounded-md border">
-              {matches ? (
-            matches.length === 0 ? (
-              <p className="px-3 py-6 text-center text-xs text-muted-foreground">No matches.</p>
+            {treeError ? (
+              <Alert variant="destructive">
+                <AlertTriangleIcon />
+                <AlertTitle>Documents could not be loaded</AlertTitle>
+                <AlertDescription>{treeError}</AlertDescription>
+                <AlertActions>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setTreeError(""); setTreeLoaded(false); setReloadKey((k) => k + 1); }}
+                  >
+                    Try again
+                  </Button>
+                </AlertActions>
+              </Alert>
             ) : (
-              <ul className="divide-y">
-                {matches.map((e) => {
-                  const Icon = iconForFile(e.extension);
-                  const id = idsByPath[e.relativePath];
-                  const isAlready = id ? alreadyLinkedIds.has(id) : false;
-                  const description = dirname(e.relativePath) || "in root";
-                  return (
-                    <li key={e.relativePath} className="flex items-center gap-2 px-3 py-2 text-xs">
-                      <input
-                        type="checkbox"
-                        disabled={isAlready || !id}
-                        checked={selected.has(e.relativePath)}
-                        onChange={() => toggle(e.relativePath)}
-                      />
-                      <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted/40">
-                        <Icon className="size-3.5 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{e.name}</p>
-                        <p className="truncate text-[10px] text-muted-foreground">{description}</p>
-                      </div>
-                      {isAlready && <span className="text-[10px] text-muted-foreground">already linked</span>}
-                    </li>
-                  );
-                })}
-              </ul>
-            )
-          ) : (
-            <PickerTree
-              parent=""
-              childrenByParent={childrenByParent}
-              expanded={expanded}
-              onToggle={(p) => setExpanded((prev) => {
-                const n = new Set(prev);
-                if (n.has(p)) n.delete(p);
-                else n.add(p);
-                return n;
-              })}
-              selected={selected}
-              onSelect={toggle}
-              idsByPath={idsByPath}
-              alreadyLinkedIds={alreadyLinkedIds}
-            />
-          )}
-            </ScrollArea>
+              <ScrollArea className="h-[320px] rounded-md border border-line">
+                {treeLoading ? (
+                  <div className="flex flex-col gap-2 p-3" aria-busy="true" aria-label="Loading documents">
+                    {[0, 1, 2, 3, 4].map((i) => (
+                      <Skeleton key={i} className="h-7 w-full" />
+                    ))}
+                  </div>
+                ) : matches ? (
+                  matches.length === 0 ? (
+                    <Empty className="min-h-0 border-0 bg-transparent py-8">
+                      <EmptyHeader>
+                        <EmptyTitle className="text-sm">No matches</EmptyTitle>
+                        <EmptyDescription className="text-xs">
+                          No document name contains “{query.trim()}”. Try a shorter search.
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : (
+                    <ul className="divide-y divide-line">
+                      {matches.map((e) => {
+                        const Icon = iconForFile(e.extension);
+                        const id = idsByPath[e.relativePath];
+                        const isAlready = id ? alreadyLinkedIds.has(id) : false;
+                        const description = dirname(e.relativePath) || "in root";
+                        return (
+                          <li key={e.relativePath} className="flex items-center gap-2 px-3 py-2 text-xs">
+                            <Checkbox
+                              id={`doc-${e.relativePath}`}
+                              disabled={isAlready || !id}
+                              checked={selected.has(e.relativePath)}
+                              onCheckedChange={() => toggle(e.relativePath)}
+                              aria-label={`Select ${e.name}`}
+                            />
+                            <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-2">
+                              <Icon className="size-3.5 text-muted-foreground" aria-hidden />
+                            </div>
+                            <label htmlFor={`doc-${e.relativePath}`} className="min-w-0 flex-1 cursor-pointer">
+                              <span className="block truncate text-sm font-medium">{e.name}</span>
+                              <span className="block truncate text-2xs text-muted-foreground">{description}</span>
+                            </label>
+                            {isAlready && <span className="text-2xs text-muted-foreground">already linked</span>}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )
+                ) : (
+                  <PickerTree
+                    parent=""
+                    childrenByParent={childrenByParent}
+                    expanded={expanded}
+                    onToggle={(p) => setExpanded((prev) => {
+                      const n = new Set(prev);
+                      if (n.has(p)) n.delete(p);
+                      else n.add(p);
+                      return n;
+                    })}
+                    selected={selected}
+                    onSelect={toggle}
+                    idsByPath={idsByPath}
+                    alreadyLinkedIds={alreadyLinkedIds}
+                  />
+                )}
+              </ScrollArea>
+            )}
           </TabsContent>
 
           <TabsContent value="url" className="mt-3 flex flex-col gap-3">
@@ -330,7 +388,7 @@ export function LinkDocumentDialog({ open, ticketId, alreadyLinkedIds, onClose, 
                 placeholder="e.g. Figma board"
                 className="h-8 text-xs"
               />
-              <p className="text-[10px] text-muted-foreground">Falls back to the site’s domain if left blank.</p>
+              <p className="text-2xs text-muted-foreground">Falls back to the site’s domain if left blank.</p>
             </div>
           </TabsContent>
 
@@ -360,7 +418,7 @@ export function LinkDocumentDialog({ open, ticketId, alreadyLinkedIds, onClose, 
                 className="h-8 text-xs"
               />
             </div>
-            <p className="rounded-md bg-muted/40 px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
+            <p className="rounded-md border border-line bg-surface-2 px-2.5 py-2 text-2xs leading-relaxed text-muted-foreground">
               Clicking the link <span className="font-medium">copies the path</span> so you can paste
               it into Explorer. For true one-click open in Windows File Explorer, do the one-time
               setup per machine —{" "}
@@ -376,7 +434,13 @@ export function LinkDocumentDialog({ open, ticketId, alreadyLinkedIds, onClose, 
           </TabsContent>
         </Tabs>
 
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        {error && (
+          <Alert variant="destructive">
+            <AlertTriangleIcon />
+            <AlertTitle>That did not work</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
@@ -415,7 +479,16 @@ function PickerTree({
 }) {
   const list = childrenByParent[parent] || [];
   if (list.length === 0 && parent === "") {
-    return <p className="px-3 py-6 text-center text-xs text-muted-foreground">No documents yet.</p>;
+    return (
+      <Empty className="min-h-0 border-0 bg-transparent py-8">
+        <EmptyHeader>
+          <EmptyTitle className="text-sm">No documents yet</EmptyTitle>
+          <EmptyDescription className="text-xs">
+            Documents added in the Documents module show up here, ready to link.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
   }
   return (
     <ul className="text-xs">
@@ -425,11 +498,19 @@ function PickerTree({
           return (
             <li key={entry.relativePath}>
               <button
+                type="button"
                 onClick={() => onToggle(entry.relativePath)}
-                className="flex w-full items-center gap-1 px-3 py-1 hover:bg-accent/50"
+                aria-expanded={open}
+                className={cn(
+                  "flex w-full items-center gap-1 px-3 py-1 text-left",
+                  "transition-colors duration-(--dur-fast) ease-(--ease-out) hover:bg-surface-hover",
+                  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                )}
               >
-                {open ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
-                <FolderIcon className={cn("size-3.5 shrink-0", open ? "text-amber-500" : "text-muted-foreground")} />
+                {open
+                  ? <ChevronDownIcon className="size-3.5 shrink-0" aria-hidden />
+                  : <ChevronRightIcon className="size-3.5 shrink-0" aria-hidden />}
+                <FolderIcon className={cn("size-3.5 shrink-0", open ? "text-warning" : "text-muted-foreground")} aria-hidden />
                 <span className="truncate">{entry.name}</span>
               </button>
               {open && (
@@ -453,16 +534,22 @@ function PickerTree({
         const id = idsByPath[entry.relativePath];
         const isAlready = id ? alreadyLinkedIds.has(id) : false;
         return (
-          <li key={entry.relativePath} className="flex items-center gap-2 px-3 py-1 pl-7 hover:bg-accent/50">
-            <input
-              type="checkbox"
+          <li
+            key={entry.relativePath}
+            className="flex items-center gap-2 px-3 py-1 pl-7 transition-colors duration-(--dur-fast) ease-(--ease-out) hover:bg-surface-hover"
+          >
+            <Checkbox
+              id={`tree-${entry.relativePath}`}
               disabled={isAlready || !id}
               checked={selected.has(entry.relativePath)}
-              onChange={() => onSelect(entry.relativePath)}
+              onCheckedChange={() => onSelect(entry.relativePath)}
+              aria-label={`Select ${entry.name}`}
             />
-            <Icon className="size-3.5 text-muted-foreground" />
-            <span className="flex-1 truncate">{entry.name}</span>
-            {isAlready && <span className="text-[10px] text-muted-foreground">linked</span>}
+            <Icon className="size-3.5 text-muted-foreground" aria-hidden />
+            <label htmlFor={`tree-${entry.relativePath}`} className="flex-1 cursor-pointer truncate">
+              {entry.name}
+            </label>
+            {isAlready && <span className="text-2xs text-muted-foreground">linked</span>}
           </li>
         );
       })}

@@ -17,12 +17,12 @@ export type SourceKind = "official-api" | "csv" | "derived";
 const META: Record<SourceKind, { label: string; cls: string; title: string }> = {
   "official-api": {
     label: "Official API",
-    cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
+    cls: "bg-success-soft text-success-fg border-success/20",
     title: "Live data from the store's official API.",
   },
   csv: {
     label: "CSV export",
-    cls: "bg-amber-500/10 text-amber-700 dark:text-amber-500 border-amber-500/20",
+    cls: "bg-warning-soft text-warning-fg dark:text-warning border-warning/20",
     title: "Downloaded from Google Play Console CSV exports — delayed (daily/monthly), not a live API.",
   },
   derived: {
@@ -49,7 +49,7 @@ export function SourceBadge({
   return (
     <span
       title={title ?? m.title}
-      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${m.cls} ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide ${m.cls} ${className}`}
     >
       {label ?? m.label}
     </span>

@@ -15,11 +15,11 @@ export function RatingDistribution({ counts }: { counts: [number, number, number
           <div key={star} className="flex items-center gap-2.5 text-xs">
             <span className="flex w-6 items-center gap-0.5 tabular-nums text-muted-foreground">
               {star}
-              <IconStarFilled className="size-2.5 text-amber-500/70" />
+              <IconStarFilled className="size-2.5 text-warning/70" />
             </span>
             <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
               <div
-                className="h-full rounded-full bg-amber-500 transition-[width] duration-500 ease-out"
+                className="h-full rounded-full bg-warning transition-[width] duration-500 ease-out"
                 style={{ width: `${pct}%` }}
               />
             </div>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getDataAdapter } from "@/lib/db";
 import { useNow } from "@/hooks/use-now";
+import { useLocalStorageValue } from "@/hooks/use-local-storage-value";
 import type {
   ColumnRecord,
   CreateTicketPayload,
@@ -240,6 +241,57 @@ function hydrateBoards(
 }
 
 const DEFAULT_LOCKED_LIST_TITLES = new Set(["to-do", "todo", "in progress", "completed", "planned", "doing"]);
+
+export type CardDensity = "comfortable" | "compact";
+const CARD_DENSITY_STORAGE_KEY = "mc:kanban:density";
+const isCardDensity = (value: unknown): value is CardDensity => value === "comfortable" || value === "compact";
+
+/** Adds a ticket to a list without mutating the previous board. */
+const insertTicketIntoBoard = (
+  board: BoardState,
+  ticket: Ticket,
+  placement: "top" | "bottom",
+): BoardState => {
+  const ids = board.ticketIdsByColumn[ticket.statusId] ?? [];
+  return {
+    ...board,
+    tickets: { ...board.tickets, [ticket.id]: ticket },
+    ticketIdsByColumn: {
+      ...board.ticketIdsByColumn,
+      [ticket.statusId]: placement === "top" ? [ticket.id, ...ids] : [...ids, ticket.id],
+    },
+  };
+};
+
+/** Removes a ticket from every list; used to undo an optimistic insert. */
+const removeTicketFromBoard = (board: BoardState, ticketId: string): BoardState => {
+  if (!board.tickets[ticketId]) return board;
+  const tickets = { ...board.tickets };
+  delete tickets[ticketId];
+  return {
+    ...board,
+    tickets,
+    ticketIdsByColumn: Object.fromEntries(
+      Object.entries(board.ticketIdsByColumn).map(([columnId, ids]) => [columnId, ids.filter((id) => id !== ticketId)]),
+    ),
+  };
+};
+
+/** Swaps a temporary ticket for its saved record, keeping its position in the list. */
+const replaceTempTicket = (board: BoardState, tempId: string, saved: Ticket): BoardState => {
+  const tempTicket = board.tickets[tempId];
+  if (!tempTicket) return board;
+  const tickets = { ...board.tickets };
+  delete tickets[tempId];
+  tickets[saved.id] = saved;
+  return {
+    ...board,
+    tickets,
+    ticketIdsByColumn: Object.fromEntries(
+      Object.entries(board.ticketIdsByColumn).map(([columnId, ids]) => [columnId, ids.map((id) => (id === tempId ? saved.id : id))]),
+    ),
+  };
+};
 const isTicketPriority = (value: string): value is TicketPriority =>
   value === "low" || value === "medium" || value === "high" || value === "urgent";
 
@@ -383,6 +435,9 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
   });
 
   const [view, setView] = useState<ViewMode>("kanban");
+  const [storedDensity, storeDensity] = useLocalStorageValue(CARD_DENSITY_STORAGE_KEY);
+  const cardDensity: CardDensity = isCardDensity(storedDensity) ? storedDensity : "comfortable";
+  const setCardDensity = useCallback((density: CardDensity) => storeDensity(density), [storeDensity]);
   const [sort, setSort] = useState<SortMode>("manual");
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1631,57 +1686,41 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
     const assigneeIds = validAssigneeIds(createForm.assigneeIds);
     const labelIds = validLabelIds(createForm.labelIds ?? []);
 
-    const tempId = `temp-${Date.now()}`;
-    let rollbackBoard: BoardState | null = null;
-    let targetColumnId = "";
-    let beforeTicketId: string | null = null;
-
-    updateActiveBoard((prev) => {
-      rollbackBoard = cloneBoard(prev);
-
-      const nextTargetColumnId = prev.columns[createForm.statusId]
-        ? createForm.statusId
-        : prev.columnOrder[0];
-      if (!nextTargetColumnId) return prev;
-
-      targetColumnId = nextTargetColumnId;
-      beforeTicketId = prev.ticketIdsByColumn[nextTargetColumnId]?.[0] ?? null;
-
-      const newTicket: Ticket = {
-        id: tempId,
-        title,
-        description: createForm.description.trim(),
-        statusId: nextTargetColumnId,
-        priority: createForm.priority,
-        dueDate: createForm.dueDate || null,
-        tags,
-        labelIds,
-        assigneeIds,
-        scheduledFor: createForm.scheduledFor || null,
-        checklistDone: 0,
-        checklistTotal: 0,
-        comments: 0,
-        attachments: 0,
-        createdAt: Date.now(),
-      };
-
-      const nextTicketIdsByColumn = { ...prev.ticketIdsByColumn };
-      nextTicketIdsByColumn[nextTargetColumnId] = [tempId, ...(nextTicketIdsByColumn[nextTargetColumnId] ?? [])];
-
-      return {
-        ...prev,
-        tickets: { ...prev.tickets, [tempId]: newTicket },
-        ticketIdsByColumn: nextTicketIdsByColumn,
-      };
-    });
-
-    setModal(null);
-    restoreFocus();
-
-    if (!targetColumnId) {
+    // Read the board before touching state: values assigned inside a state
+    // updater are not available to this function until React re-renders.
+    const currentBoard = activeBoardRef.current;
+    const targetColumnId = currentBoard.columns[createForm.statusId]
+      ? createForm.statusId
+      : currentBoard.columnOrder[0] ?? "";
+    if (!targetColumnId || !activeBoardId) {
       toast.error("Create a list before adding a ticket.");
       return;
     }
+    const beforeTicketId = currentBoard.ticketIdsByColumn[targetColumnId]?.[0] ?? null;
+
+    const tempId = `temp-${Date.now()}`;
+    const optimisticTicket: Ticket = {
+      id: tempId,
+      title,
+      description: createForm.description.trim(),
+      statusId: targetColumnId,
+      priority: createForm.priority,
+      dueDate: createForm.dueDate || null,
+      tags,
+      labelIds,
+      assigneeIds,
+      scheduledFor: createForm.scheduledFor || null,
+      checklistDone: 0,
+      checklistTotal: 0,
+      comments: 0,
+      attachments: 0,
+      createdAt: Date.now(),
+    };
+
+    updateActiveBoard((prev) => insertTicketIntoBoard(prev, optimisticTicket, "top"));
+
+    setModal(null);
+    restoreFocus();
 
     const payload: CreateTicketPayload = {
       columnId: targetColumnId,
@@ -1710,45 +1749,25 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
         }
       }
 
-      updateActiveBoard((prev) => {
-        const tempTicket = prev.tickets[tempId];
-        if (!tempTicket) return prev;
-
-        const nextTickets = { ...prev.tickets };
-        delete nextTickets[tempId];
-        nextTickets[created.id] = {
-          ...tempTicket,
-          id: created.id,
-          statusId: created.columnId,
-          priority: created.priority,
-          dueDate: formatDueDateInput(created.dueDate),
-          scheduledFor: formatDueDateInput(created.scheduledFor),
-          checklistDone: created.checklistDone,
-          checklistTotal: created.checklistTotal,
-          comments: created.commentsCount,
-          attachments: created.attachmentsCount + uploadedCount,
-          createdAt: new Date(created.createdAt).valueOf(),
-        };
-
-        const nextTicketIdsByColumn: Record<string, string[]> = {};
-        for (const [columnId, ticketIds] of Object.entries(prev.ticketIdsByColumn)) {
-          nextTicketIdsByColumn[columnId] = ticketIds.map((ticketId) =>
-            ticketId === tempId ? created.id : ticketId,
-          );
-        }
-
-        return {
-          ...prev,
-          tickets: nextTickets,
-          ticketIdsByColumn: nextTicketIdsByColumn,
-        };
-      });
+      updateActiveBoard((prev) => replaceTempTicket(prev, tempId, {
+        ...optimisticTicket,
+        id: created.id,
+        statusId: created.columnId,
+        priority: created.priority,
+        dueDate: formatDueDateInput(created.dueDate),
+        scheduledFor: formatDueDateInput(created.scheduledFor),
+        checklistDone: created.checklistDone,
+        checklistTotal: created.checklistTotal,
+        comments: created.commentsCount,
+        attachments: created.attachmentsCount + uploadedCount,
+        createdAt: new Date(created.createdAt).valueOf(),
+      }));
 
       const assignedNames = assigneeIds
         .map((id) => resolveAssigneeName(id))
         .filter((name): name is string => Boolean(name));
       const detailParts = [
-        targetColumnId ? `Created in ${board.columns[targetColumnId]?.title ?? "list"}.` : "Created ticket.",
+        `Created in ${currentBoard.columns[targetColumnId]?.title ?? "list"}.`,
       ];
       if (assignedNames.length > 0) {
         detailParts.push(`Assigned to ${assignedNames.join(", ")}.`);
@@ -1799,11 +1818,77 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
         uploadedCount > 0 ? `Ticket created with ${uploadedCount} attachment(s)` : "Ticket created",
       );
     } catch (error) {
-      if (rollbackBoard) {
-        updateActiveBoard(() => rollbackBoard as BoardState);
-      }
+      // Roll back only this ticket; other edits may have landed meanwhile.
+      updateActiveBoard((prev) => removeTicketFromBoard(prev, tempId));
       const message = error instanceof Error ? error.message : "Failed to create ticket.";
       toast.error(message);
+    }
+  };
+
+  /**
+   * Creates a title-only ticket at the bottom of a list, straight from the board.
+   * Resolves to true once the ticket is saved; a failure removes the optimistic card.
+   */
+  const quickCreateTicket = async (columnId: string, rawTitle: string): Promise<boolean> => {
+    const title = rawTitle.trim();
+    const currentBoard = activeBoardRef.current;
+    if (!title || !activeBoardId || !currentBoard.columns[columnId]) return false;
+
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: Ticket = {
+      id: tempId,
+      title,
+      description: "",
+      statusId: columnId,
+      priority: "low",
+      dueDate: null,
+      tags: [],
+      labelIds: [],
+      assigneeIds: [],
+      scheduledFor: null,
+      checklistDone: 0,
+      checklistTotal: 0,
+      comments: 0,
+      attachments: 0,
+      createdAt: Date.now(),
+    };
+    updateActiveBoard((prev) => insertTicketIntoBoard(prev, optimistic, "bottom"));
+
+    try {
+      const created = await adapter.createTicket(activeBoardId, {
+        columnId,
+        title,
+        description: "",
+        priority: "low",
+        dueDate: null,
+        scheduledFor: null,
+        tags: [],
+        labelIds: [],
+        assigneeIds: [],
+        checklistDone: 0,
+        checklistTotal: 0,
+        attachmentsCount: 0,
+        commentsCount: 0,
+        beforeTicketId: null,
+      });
+      updateActiveBoard((prev) => replaceTempTicket(prev, tempId, {
+        ...optimistic,
+        id: created.id,
+        statusId: created.columnId,
+        priority: created.priority,
+        createdAt: new Date(created.createdAt).valueOf(),
+      }));
+      void createTicketActivity(
+        created.id,
+        "Ticket created",
+        `Created in ${currentBoard.columns[columnId]?.title ?? "list"}.`,
+        "success",
+      );
+      return true;
+    } catch (error) {
+      updateActiveBoard((prev) => removeTicketFromBoard(prev, tempId));
+      toast.error(error instanceof Error ? error.message : "Failed to create ticket.");
+      return false;
     }
   };
 
@@ -2036,6 +2121,30 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
       }
       const message = error instanceof Error ? error.message : "Failed to create list.";
       toast.error(message);
+    }
+  };
+
+  /** Renames a list in place; an unchanged or blank title is a no-op. */
+  const renameList = async (columnId: string, rawTitle: string): Promise<boolean> => {
+    const title = rawTitle.trim();
+    const column = activeBoardRef.current.columns[columnId];
+    if (!column || !title || title === column.title) return false;
+
+    const previousTitle = column.title;
+    const setTitle = (nextTitle: string) => updateActiveBoard((prev) => {
+      const current = prev.columns[columnId];
+      if (!current || current.title === nextTitle) return prev;
+      return { ...prev, columns: { ...prev.columns, [columnId]: { ...current, title: nextTitle } } };
+    });
+
+    setTitle(title);
+    try {
+      await adapter.updateColumn(columnId, { title });
+      return true;
+    } catch (error) {
+      setTitle(previousTitle);
+      toast.error(error instanceof Error ? error.message : "Failed to rename list.");
+      return false;
     }
   };
 
@@ -2450,6 +2559,8 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
     setActiveBoardId: selectBoard,
     view,
     setView,
+    cardDensity,
+    setCardDensity,
     sort,
     setSort,
     searchInput,
@@ -2511,6 +2622,7 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
     keepEditing,
     discardChanges,
     handleCreateTicket,
+    quickCreateTicket,
     handleCopyTicket,
     handleDeleteTicket,
     createBoardOpen,
@@ -2540,6 +2652,7 @@ export function useTasks({ initialBoardId, initialBoards, assigneesByBoardId, la
     openCreateListModal,
     closeCreateListModal,
     canDeleteList,
+    renameList,
     handleDeleteList,
     handleCreateList,
     handleSaveDetails,

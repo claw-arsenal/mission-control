@@ -116,7 +116,7 @@ export default async function LogsPage() {
 
   return (
     <SidebarProvider
-      style={{ "--sidebar-width": "calc(var(--spacing) * 72)", "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}
+      style={{ "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}
     >
       <AppSidebar variant="inset" initialUser={null} />
       <SidebarInset>

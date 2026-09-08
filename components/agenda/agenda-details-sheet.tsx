@@ -218,7 +218,7 @@ function ResultBadge({ status }: { status: string | null }) {
   const cfg = STATUS_BADGE_MAP[status ?? ""] ?? { ...STATUS_BADGE_FALLBACK, label: status ?? STATUS_BADGE_FALLBACK.label };
   return (
     <Tip text={cfg.tooltip}>
-      <Badge variant="outline" className={`text-[10px] uppercase tracking-wider ${cfg.className}`}>
+      <Badge variant="outline" className={`text-2xs uppercase tracking-wider ${cfg.className}`}>
         {cfg.label}
       </Badge>
     </Tip>
@@ -402,13 +402,13 @@ function AgendaOccurrenceLogs({ occurrenceId }: { occurrenceId: string | null })
             <span className="font-semibold text-foreground" style={eventTone[log.event_type] ?? undefined}>
               {eventLabel[log.event_type] ?? log.event_type.replace(/^agenda\./, '').replaceAll('_', ' ')}
             </span>
-            <span className="text-muted-foreground text-[10px]">
+            <span className="text-muted-foreground text-2xs">
               {new Date(log.occurred_at).toLocaleTimeString()}
             </span>
           </div>
           <p className="text-muted-foreground leading-relaxed">{log.message}</p>
           {(log.raw_payload?.durationMs || log.raw_payload?.model || log.raw_payload?.runDelaySeconds != null || log.raw_payload?.outputSource || log.raw_payload?.artifactName) ? (
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-muted-foreground">
               {log.raw_payload?.durationMs ? (
                 <span>Duration: {Math.round(Number(log.raw_payload.durationMs) / 1000)}s</span>
               ) : null}
@@ -471,7 +471,7 @@ function AgentOutput({ outputPayload }: { outputPayload: string | Record<string,
   return (
     <div className="min-w-0 overflow-hidden rounded-lg border bg-muted/40 p-4 flex flex-col gap-2 break-words [overflow-wrap:anywhere]">
       {parsed.outputSource ? (
-        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground break-words [overflow-wrap:anywhere]">
+        <p className="text-2xs font-bold uppercase tracking-wider text-muted-foreground break-words [overflow-wrap:anywhere]">
           Output source: {beautifyOutputSource(parsed.outputSource)}
         </p>
       ) : null}
@@ -491,8 +491,8 @@ function formatBytes(size: number): string {
 function fileIcon(mimeType: string | undefined) {
   if (!mimeType) return <IconFile className="size-5 text-primary" />;
   if (mimeType.startsWith("image/")) return <IconPhoto className="size-5 text-primary" />;
-  if (mimeType === "application/pdf") return <span className="text-[11px] font-bold text-primary">PDF</span>;
-  if (mimeType.startsWith("text/")) return <span className="text-[11px] font-bold text-primary">TXT</span>;
+  if (mimeType === "application/pdf") return <span className="text-2xs font-bold text-primary">PDF</span>;
+  if (mimeType.startsWith("text/")) return <span className="text-2xs font-bold text-primary">TXT</span>;
   return <IconFile className="size-5 text-primary" />;
 }
 
@@ -503,7 +503,7 @@ function ArtifactImagePreview({ stepId, file }: { stepId: string; file: Artifact
   return (
     <div className="rounded-lg border bg-muted/10 p-3">
       <div className="flex flex-col gap-3">
-        <p className="text-[10px] text-muted-foreground font-medium leading-none">{file.name}</p>
+        <p className="text-2xs text-muted-foreground font-medium leading-none">{file.name}</p>
         <div className="rounded-md overflow-hidden bg-background/60">
           {failed ? (
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground text-xs">
@@ -754,14 +754,14 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                       <Badge
                         variant="outline"
                         className={[
-                          "text-[10px] uppercase tracking-wider cursor-default",
+                          "text-2xs uppercase tracking-wider cursor-default",
                           event.status === "active"
-                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            ? "border-success/40 bg-success-soft text-success-fg"
                             : "border-muted-foreground/30 text-muted-foreground",
                         ].join(" ")}
                       >
                         {event.status === "active" && (
-                          <span className="size-1.5 rounded-full bg-emerald-500 mr-1 shrink-0" />
+                          <span className="mr-1 size-1.5 shrink-0 rounded-full bg-success" />
                         )}
                         {event.status}
                       </Badge>
@@ -770,7 +770,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                       <Tip text="This event repeats on a schedule (daily, weekly, or monthly)">
                         <Badge
                           variant="outline"
-                          className="text-[10px] uppercase tracking-wider gap-1 border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400 cursor-default"
+                          className="text-2xs uppercase tracking-wider gap-1 border-info/40 bg-info-soft text-info-fg cursor-default"
                         >
                           <IconRepeat className="size-2.5" />
                           Recurring
@@ -807,7 +807,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                           <>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
-                              className={`gap-2 ${canRetry ? "cursor-pointer text-amber-600 dark:text-amber-400" : "opacity-50 cursor-not-allowed"}`}
+                              className={`gap-2 ${canRetry ? "text-warning-fg" : "opacity-50 cursor-not-allowed"}`}
                               disabled={!canRetry}
                               onClick={() => {
                                 if (!canRetry) return;
@@ -874,7 +874,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                     <CardHeader>
                       <div className="flex items-start justify-between gap-2">
                         <CardDescription className="m-0">Schedule</CardDescription>
-                        <Badge variant="outline" className="shrink-0 text-[10px]">
+                        <Badge variant="outline" className="shrink-0 text-2xs">
                           <IconCalendar className="size-3" />
                           {event.startDate ?? "Not set"}
                         </Badge>
@@ -943,7 +943,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                     <CardHeader>
                       <div className="flex items-start justify-between gap-2">
                         <CardDescription className="m-0">Created At</CardDescription>
-                        <Badge variant="outline" className="shrink-0 text-[10px]">
+                        <Badge variant="outline" className="shrink-0 text-2xs">
                           <IconCalendarClock className="size-3" />
                           Created
                         </Badge>
@@ -985,9 +985,9 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                       className={[
                         overviewCardClassName,
                         (selectedAttempt?.status ?? displayedOccurrence.status) === "failed"
-                          ? "border-red-200 dark:border-red-900"
+                          ? "border-danger/40"
                           : (selectedAttempt?.status ?? displayedOccurrence.status) === "running"
-                            ? "border-blue-200 dark:border-blue-900"
+                            ? "border-info/40"
                             : "",
                       ].join(" ")}
                     >
@@ -1080,8 +1080,8 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                         <CardAction>
                           <Badge variant="outline" className={
                             !selectedAttempt.finished_at
-                              ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                              ? "border-warning/40 bg-warning-soft text-warning-fg"
+                              : "border-success/40 bg-success-soft text-success-fg"
                           }>
                             <IconClock className="size-3" />
                             {selectedAttempt.finished_at ? "Completed" : "In progress"}
@@ -1143,8 +1143,8 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                     </CardHeader>
                     <CardFooter className="mt-auto flex-col items-start gap-2 text-sm">
                       <div className="flex items-center gap-1.5 w-full min-w-0">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Event</span>
-                        <code className="flex-1 min-w-0 truncate text-[11px] font-mono text-foreground/80">{event.id}</code>
+                        <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Event</span>
+                        <code className="flex-1 min-w-0 truncate text-2xs font-mono text-foreground/80">{event.id}</code>
                         <Button
                           size="sm"
                           variant="ghost"
@@ -1157,8 +1157,8 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                       </div>
                       {isRecurring && selectedOccurrenceId && (
                         <div className="flex items-center gap-1.5 w-full min-w-0">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Occ.</span>
-                          <code className="flex-1 min-w-0 truncate text-[11px] font-mono text-foreground/80">{selectedOccurrenceId}</code>
+                          <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Occ.</span>
+                          <code className="flex-1 min-w-0 truncate text-2xs font-mono text-foreground/80">{selectedOccurrenceId}</code>
                           <Button
                             size="sm"
                             variant="ghost"
@@ -1194,7 +1194,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                           </CardAction>
                         </CardHeader>
                         <CardFooter className="mt-auto flex-col items-start gap-2 text-sm">
-                          <code className="w-full truncate text-[11px] font-mono text-muted-foreground" title={outputFolder}>
+                          <code className="w-full truncate text-2xs font-mono text-muted-foreground" title={outputFolder}>
                             {outputFolder}
                           </code>
                           <Button
@@ -1230,7 +1230,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                   <div className="flex flex-col gap-4">
                     {selectedOccurrence?.rendered_prompt && (
                       <>
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Input sent to agent</p>
+                        <p className="eyebrow">Input sent to agent</p>
                         <div className="rounded-lg border bg-muted/40 p-4">
                           <p className="text-xs text-foreground/80 whitespace-pre-wrap leading-relaxed font-mono max-h-[400px] overflow-y-auto">
                             {sanitizePromptForDisplay(selectedOccurrence.rendered_prompt) ?? selectedOccurrence.rendered_prompt}
@@ -1296,7 +1296,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                           <CardTitle className="text-base font-semibold flex items-center gap-2">
                             {stepLabel}
                             {totalAttempts > 1 && (
-                              <Badge variant="secondary" className="text-[10px] font-medium">
+                              <Badge variant="secondary" className="text-2xs font-medium">
                                 {totalAttempts} attempt{totalAttempts === 1 ? "" : "s"}
                               </Badge>
                             )}
@@ -1311,38 +1311,38 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                           <div className="flex flex-col gap-1.5 rounded-lg bg-muted/30 p-3">
                             {step.process_name && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Process</span>
+                                <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Process</span>
                                 <span className="text-xs text-foreground">{step.process_name}</span>
                               </div>
                             )}
                             {step.step_title && step.step_title !== step.process_name && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Title</span>
+                                <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Title</span>
                                 <span className="text-xs text-foreground">{step.step_title}</span>
                               </div>
                             )}
                             {step.skill_key && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Skill</span>
-                                <Badge variant="secondary" className="text-[10px]">{step.skill_key}</Badge>
+                                <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Skill</span>
+                                <Badge variant="secondary" className="text-2xs">{step.skill_key}</Badge>
                               </div>
                             )}
                             {step.agent_id && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Agent</span>
+                                <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Agent</span>
                                 <span className="text-xs font-mono text-foreground/80">{step.agent_id}</span>
                               </div>
                             )}
                             {step.step_instruction && !promptText && (
                               <div className="flex items-start gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0 pt-0.5">Desc</span>
+                                <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0 pt-0.5">Desc</span>
                                 <span className="text-xs text-foreground/80 leading-relaxed">{step.step_instruction.length > 300 ? step.step_instruction.slice(0, 300) + "…" : step.step_instruction}</span>
                               </div>
                             )}
                             {(step.started_at || step.finished_at) && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Time</span>
-                                <span className="text-[10px] text-muted-foreground">
+                                <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-16 shrink-0">Time</span>
+                                <span className="text-2xs text-muted-foreground">
                                   {step.started_at ? formatTime(step.started_at, event.timezone) : "—"}
                                   {step.finished_at ? ` → ${formatTime(step.finished_at, event.timezone)}` : ""}
                                 </span>
@@ -1353,7 +1353,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                           {/* Step Request — same label + content pattern as Output */}
                           {promptText && (
                             <>
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              <p className="eyebrow">
                                 Step request
                               </p>
                               <div className="min-w-0 overflow-hidden rounded-lg border bg-muted/40 p-4">
@@ -1366,8 +1366,8 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
 
                           {/* Output */}
                           {step.error_message && (
-                            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-600">
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-red-700 dark:text-red-400 mb-1">Error</p>
+                            <div className="rounded-lg border border-danger/30 bg-danger-soft p-3 text-sm text-danger-fg">
+                              <p className="eyebrow mb-1 text-danger-fg">Error</p>
                               {step.error_message}
                             </div>
                           )}
@@ -1376,7 +1376,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                             if (parsedOutput) {
                               return (
                                 <>
-                                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                  <p className="eyebrow">
                                     {step.status === "failed" ? "Output (failed run)" : "Output"}
                                   </p>
                                   <AgentOutput outputPayload={step.output_payload} />
@@ -1415,7 +1415,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
       <AlertDialog open={forceRetryDialogOpen} onOpenChange={(isOpen) => { setForceRetryDialogOpen(isOpen); }}>
         <AlertDialogContent className="max-h-[90vh] overflow-y-auto">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+            <AlertDialogTitle className="flex items-center gap-2 text-warning-fg">
               <IconRefresh className="size-4" />
               Force retry this completed run?
             </AlertDialogTitle>
@@ -1430,7 +1430,7 @@ export function AgendaDetailsSheet({ open, event, agents, onClose, onEdit, onCop
                 if (selectedOccurrenceId) onRetry(selectedOccurrenceId, { force: true });
                 setForceRetryDialogOpen(false);
               }}
-              className="bg-amber-600 text-white hover:bg-amber-700 cursor-pointer"
+              className="bg-warning text-background hover:bg-warning/90"
             >
               Force Retry
             </AlertDialogAction>

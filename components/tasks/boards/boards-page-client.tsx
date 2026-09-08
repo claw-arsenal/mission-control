@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { CalendarView } from "@/components/tasks/calendar/calendar-view";
@@ -24,9 +23,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Empty, EmptyDescription, EmptyFooter, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTasks } from "@/hooks/use-tasks";
 import { cn } from "@/lib/utils";
@@ -57,6 +57,7 @@ import {
   Trash2Icon,
   LayoutGridIcon,
 } from "lucide-react";
+import { PageHeader } from "@/components/layout/page-header";
 import { BoardActivityFeed, type LiveLog } from "@/components/tasks/boards/board-activity-feed";
 import { WorkspaceToolbar } from "@/components/tasks/boards/workspace-toolbar";
 
@@ -187,8 +188,13 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
   const searchParams = useSearchParams();
   const [boardSearch, setBoardSearch] = useState("");
   const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialBoardId));
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [boardActivity, setBoardActivity] = useState<LiveLog[]>([]);
   const [boardActivityLoading, setBoardActivityLoading] = useState(false);
+  const [boardActivityError, setBoardActivityError] = useState<string | null>(null);
+  const [activitySheetOpen, setActivitySheetOpen] = useState(false);
+  // Bumped by the feed's retry action to re-run the load and reconnect.
+  const [activityReloadKey, setActivityReloadKey] = useState(0);
 
   // Confirmation modal state
   const [deleteBoardId, setDeleteBoardId] = useState<string | null>(null);
@@ -414,12 +420,16 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action: "listBoardActivity", boardId: tasks.activeBoardId, limit: 20 }),
         });
+        if (!response.ok) throw new Error(`The server returned ${response.status}.`);
         const data = await response.json();
         if (!cancelled) {
           setBoardActivity(Array.isArray(data.rows) ? data.rows : []);
+          setBoardActivityError(null);
         }
       } catch (error) {
-        console.error("Failed to load initial activity", error);
+        if (!cancelled) {
+          setBoardActivityError(error instanceof Error ? error.message : "Board activity could not be loaded.");
+        }
       } finally {
         if (!cancelled) setBoardActivityLoading(false);
       }
@@ -445,11 +455,17 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
       });
 
       eventSource.addEventListener("error", () => {
-        // EventSource will attempt to reconnect automatically.
+        // The browser retries on its own; only a closed stream is worth reporting.
+        if (!cancelled && eventSource?.readyState === EventSource.CLOSED) {
+          setBoardActivityLoading(false);
+          setBoardActivityError("Live updates disconnected.");
+        }
       });
 
       eventSource.onopen = () => {
+        if (cancelled) return;
         setBoardActivityLoading(false);
+        setBoardActivityError(null);
       };
     };
 
@@ -462,103 +478,102 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
         eventSource = null;
       }
     };
-  }, [tasks.activeBoardId, workspaceOpen]); // removed tasks from deps
+  }, [tasks.activeBoardId, workspaceOpen, activityReloadKey]); // `tasks` is deliberately not a dependency
+
+  const activityStatusLabel = boardActivityError
+    ? "Offline"
+    : boardActivityLoading
+      ? "Connecting…"
+      : "Live feed";
+  const activityDotClass = boardActivityError
+    ? "bg-danger"
+    : boardActivityLoading
+      ? "bg-warning motion-safe:animate-pulse"
+      : "bg-success";
+
+  const activityFeed = (
+    <BoardActivityFeed
+      activity={boardActivity}
+      loading={boardActivityLoading}
+      error={boardActivityError}
+      onRetry={() => setActivityReloadKey((key) => key + 1)}
+      onTicketClick={(ticketId) => {
+        setActivitySheetOpen(false);
+        tasks.openDetailsModal(ticketId);
+      }}
+    />
+  );
 
   return (
     <SidebarProvider
       style={
         {
-          "--sidebar-width": "calc(var(--spacing) * 72)",
           "--header-height": "calc(var(--spacing) * 14)",
         } as React.CSSProperties
       }
     >
       <AppSidebar variant="inset" initialUser={sidebarUser} />
       <SidebarInset>
-        <header className="flex h-auto shrink-0 border-b transition-[width,height] ease-linear md:h-(--header-height) md:group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
-          <div className="flex w-full flex-col gap-2 px-3 py-2 sm:px-4 lg:px-6 md:flex-row md:items-center md:gap-2 md:py-0">
-            <div className="flex items-center gap-1">
-              <SidebarTrigger className="-ml-1" />
-              {workspaceOpen && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={closeBoardWorkspace}
-                  aria-label="Back to all boards"
-                  title="All boards"
-                  className="size-7 rounded-full border border-border/60 bg-background/70 text-muted-foreground shadow-xs transition-[transform,box-shadow,background-color] hover:-translate-y-0.5 hover:bg-accent hover:text-foreground hover:shadow-sm"
-                >
-                  <ChevronLeftIcon className="h-4 w-4" />
-                </Button>
-              )}
-              <Separator orientation="vertical" className="mx-2 hidden h-4 md:flex" />
-              <span className="max-w-[220px] truncate text-sm font-medium">
-                {workspaceOpen ? tasks.activeBoardName || "Boards" : "Boards"}
-              </span>
-            </div>
+        <PageHeader
+          page={workspaceOpen ? tasks.activeBoardName || "Board" : "Boards"}
+          crumbs={workspaceOpen ? [{ label: "Boards", href: "/boards" }] : []}
+          leading={
+            workspaceOpen ? (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={closeBoardWorkspace}
+                aria-label="Back to all boards"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeftIcon />
+              </Button>
+            ) : undefined
+          }
+          actions={
+            workspaceOpen ? (
+              <>
+                <div className="hidden items-center gap-2 md:flex">
+                  <WorkspaceToolbar
+                    tasks={tasks}
+                    boardAssignees={assigneesByBoardId[tasks.activeBoardId] ?? []}
+                    boardLabels={labelsByBoardId[tasks.activeBoardId] ?? []}
+                    onManageAssignees={() => setManageAssigneesOpen(true)}
+                    onManageLabels={() => setManageLabelsOpen(true)}
+                    onEditBoard={() => tasks.openEditBoardModal(tasks.activeBoardId)}
+                    onCopyBoard={() => requestCopyBoard(tasks.activeBoardId, true)}
+                    onDeleteBoard={() => requestDeleteBoard(tasks.activeBoardId)}
+                  />
+                </div>
 
-            <div className="flex w-full items-center gap-2 md:flex-1 md:justify-center md:px-4">
-              <div className="relative min-w-0 flex-1 md:max-w-sm">
-                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="h-9 pl-9 pr-3 text-sm"
-                  placeholder={workspaceOpen ? "Search tickets..." : "Search boards..."}
-                  aria-label={workspaceOpen ? "Search tickets" : "Search boards"}
-                  value={workspaceOpen ? tasks.searchInput : boardSearch}
-                  onChange={(event) => {
-                    if (workspaceOpen) {
-                      tasks.setSearchInput(event.target.value);
-                      return;
-                    }
-                    setBoardSearch(event.target.value);
-                  }}
-                />
-              </div>
-
-              {workspaceOpen ? (
+                {/* Below md the toolbar collapses to the primary action plus one menu */}
                 <div className="flex items-center gap-1 md:hidden">
                   <Button
                     size="icon-sm"
                     onClick={() => tasks.openCreateModal(tasks.board.columnOrder[0] ?? "")}
-                    aria-label="Create ticket"
+                    aria-label="Add ticket"
                   >
-                    <PlusIcon className="h-4 w-4" />
+                    <PlusIcon />
                   </Button>
 
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-sm" aria-label="Board actions" id={`workspace-board-actions-${tasks.activeBoardId || 'none'}`}>
-                        <MoreHorizontalIcon className="h-4 w-4" />
+                      <Button variant="ghost" size="icon-sm" aria-label="Board actions" id={`workspace-board-actions-${tasks.activeBoardId || "none"}`}>
+                        <MoreHorizontalIcon />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-56">
-                      <DropdownMenuItem onClick={tasks.openCreateListModal}>
-                        Add list
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setManageAssigneesOpen(true)}>
-                        Manage assignees
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setManageLabelsOpen(true)}>
-                        Manage labels
-                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={tasks.openCreateListModal}>Add list</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setManageAssigneesOpen(true)}>Manage assignees</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setManageLabelsOpen(true)}>Manage labels</DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => tasks.openEditBoardModal(tasks.activeBoardId)}>
-                        Edit board
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => requestCopyBoard(tasks.activeBoardId, true)}>
-                        Copy board
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onClick={() => requestDeleteBoard(tasks.activeBoardId)}
-                      >
+                      <DropdownMenuItem onClick={() => tasks.openEditBoardModal(tasks.activeBoardId)}>Edit board</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => requestCopyBoard(tasks.activeBoardId, true)}>Copy board</DropdownMenuItem>
+                      <DropdownMenuItem variant="destructive" onClick={() => requestDeleteBoard(tasks.activeBoardId)}>
                         Delete board
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuRadioGroup
-                        value={tasks.sort}
-                        onValueChange={(value) => tasks.setSort(value as SortMode)}
-                      >
+                      <DropdownMenuRadioGroup value={tasks.sort} onValueChange={(value) => tasks.setSort(value as SortMode)}>
                         {SORT_OPTIONS.map((option) => (
                           <DropdownMenuRadioItem key={option.key} value={option.key}>
                             {option.label}
@@ -566,10 +581,7 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                         ))}
                       </DropdownMenuRadioGroup>
                       <DropdownMenuSeparator />
-                      <DropdownMenuRadioGroup
-                        value={tasks.view}
-                        onValueChange={(value) => tasks.setView(value as ViewMode)}
-                      >
+                      <DropdownMenuRadioGroup value={tasks.view} onValueChange={(value) => tasks.setView(value as ViewMode)}>
                         {VIEW_OPTIONS.map((option) => (
                           <DropdownMenuRadioItem key={option.key} value={option.key}>
                             {option.label}
@@ -579,67 +591,103 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-              ) : (
-                <Button variant="outline" size="sm" onClick={tasks.openCreateBoardModal} className="md:hidden">
-                  <PlusIcon className="h-4 w-4" />
-                  Add board
-                </Button>
-              )}
-            </div>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={tasks.openCreateBoardModal}>
+                <PlusIcon />
+                Add board
+              </Button>
+            )
+          }
+        />
 
-            <div className="hidden items-center gap-2 md:flex">
-              {workspaceOpen ? (
-                <WorkspaceToolbar
-                  tasks={tasks}
-                  boardAssignees={assigneesByBoardId[tasks.activeBoardId] ?? []}
-                  boardLabels={labelsByBoardId[tasks.activeBoardId] ?? []}
-                  onManageAssignees={() => setManageAssigneesOpen(true)}
-                  onManageLabels={() => setManageLabelsOpen(true)}
-                  onEditBoard={() => tasks.openEditBoardModal(tasks.activeBoardId)}
-                  onCopyBoard={() => requestCopyBoard(tasks.activeBoardId, true)}
-                  onDeleteBoard={() => requestDeleteBoard(tasks.activeBoardId)}
-                />
-              ) : (
-                <Button variant="outline" size="sm" className="gap-1.5 cursor-pointer" onClick={tasks.openCreateBoardModal}>
-                  <PlusIcon className="h-4 w-4" />
-                  Add board
-                </Button>
-              )}
-            </div>
+        {/* Search sits under the header so one field serves every width */}
+        <div className="page-x flex items-center gap-3 border-b border-line py-2">
+          <div className="relative min-w-0 flex-1 md:max-w-sm">
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              ref={searchInputRef}
+              className="h-8 pr-3 pl-8"
+              placeholder={workspaceOpen ? "Search tickets…" : "Search boards…"}
+              aria-label={workspaceOpen ? "Search tickets" : "Search boards"}
+              value={workspaceOpen ? tasks.searchInput : boardSearch}
+              onChange={(event) => {
+                if (workspaceOpen) {
+                  tasks.setSearchInput(event.target.value);
+                  return;
+                }
+                setBoardSearch(event.target.value);
+              }}
+            />
           </div>
-        </header>
+
+          {workspaceOpen ? (
+            <div className="ml-auto flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+              <span className="tabular-nums">
+                {tasks.totalVisible} ticket{tasks.totalVisible !== 1 ? "s" : ""}
+              </span>
+
+              {/* The activity panel only fits beside the board on large screens;
+                  below that the same status opens it in a sheet. */}
+              <span className="hidden items-center gap-1.5 lg:flex" role="status">
+                <span className={cn("size-1.5 rounded-full", activityDotClass)} aria-hidden />
+                {activityStatusLabel}
+              </span>
+
+              <Sheet open={activitySheetOpen} onOpenChange={setActivitySheetOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs text-muted-foreground lg:hidden">
+                    <span className={cn("size-1.5 rounded-full", activityDotClass)} aria-hidden />
+                    Activity
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="right" className="w-[min(22rem,calc(100vw-2rem))] p-0">
+                  {/* The feed carries its own visible heading, so the sheet's is for assistive tech. */}
+                  <SheetHeader className="sr-only">
+                    <SheetTitle>Board activity</SheetTitle>
+                    <SheetDescription>{activityStatusLabel}</SheetDescription>
+                  </SheetHeader>
+                  <div className="min-h-0 flex-1 overflow-hidden p-3">{activityFeed}</div>
+                </SheetContent>
+              </Sheet>
+            </div>
+          ) : (
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {boardSearch.trim()
+                ? `${visibleBoards.length} result${visibleBoards.length !== 1 ? "s" : ""}`
+                : `${tasks.boards.length} board${tasks.boards.length !== 1 ? "s" : ""}`}
+            </span>
+          )}
+        </div>
 
         {!workspaceOpen ? (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="flex flex-1 flex-col overflow-auto px-4 py-5 sm:px-5 lg:px-6"
-          >
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-foreground">All boards</h2>
-                <span className="text-xs text-muted-foreground">
-                  {tasks.boards.length} board{tasks.boards.length !== 1 ? "s" : ""}
-                </span>
-              </div>
-              {!!boardSearch.trim() && (
-                <span className="text-xs text-muted-foreground">
-                  {visibleBoards.length} result{visibleBoards.length !== 1 ? "s" : ""}
-                </span>
-              )}
-            </div>
-
+          <div className="page-x flex flex-1 flex-col overflow-auto py-(--page-y)">
             {visibleBoards.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-center border rounded-xl bg-muted/20">
-                <LayoutGridIcon className="size-12 text-muted-foreground/40 mb-4" />
-                <p className="font-semibold text-foreground mb-1">No boards found</p>
-                <p className="text-sm text-muted-foreground max-w-xs">
-                  Create your first board to organize and track your tasks visually.
-                </p>
-              </div>
+              <Empty className="border-line bg-surface-2/60">
+                <EmptyHeader>
+                  <LayoutGridIcon className="mx-auto mb-2 size-8 text-muted-foreground/50" aria-hidden />
+                  <EmptyTitle>{boardSearch.trim() ? "No boards match that search" : "No boards yet"}</EmptyTitle>
+                  <EmptyDescription>
+                    {boardSearch.trim()
+                      ? "Try a different term, or clear the search to see every board."
+                      : "A board holds your lists and tickets. Create one to start tracking work."}
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyFooter>
+                  {boardSearch.trim() ? (
+                    <Button variant="outline" size="sm" onClick={() => setBoardSearch("")}>
+                      Clear search
+                    </Button>
+                  ) : (
+                    <Button size="sm" onClick={tasks.openCreateBoardModal}>
+                      <PlusIcon />
+                      Add board
+                    </Button>
+                  )}
+                </EmptyFooter>
+              </Empty>
             ) : (
-              <div className="overflow-hidden rounded-lg border">
+              <div className="surface-card overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -658,8 +706,8 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                       <TableRow
                         key={board.id}
                         className={cn(
-                          "cursor-pointer transition-colors hover:bg-muted/40",
-                          board.id === tasks.activeBoardId && "bg-muted/20",
+                          "cursor-pointer",
+                          board.id === tasks.activeBoardId && "bg-surface-2",
                         )}
                         onClick={() => openBoardWorkspace(board.id)}
                       >
@@ -726,38 +774,18 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                 </Table>
               </div>
             )}
-          </motion.div>
+          </div>
         ) : (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="flex flex-1 flex-col overflow-hidden"
-          >
-            <div className="border-b px-3 py-2 sm:px-4 lg:px-6">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-muted-foreground">{tasks.activeBoardName}</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {tasks.totalVisible} ticket{tasks.totalVisible !== 1 ? "s" : ""}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <div className={`h-2 w-2 rounded-full ${boardActivityLoading ? "bg-amber-500" : "bg-emerald-500"}`} />
-                  <span>{boardActivityLoading ? "Connecting…" : "Live feed"}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid min-h-0 flex-1 gap-4 overflow-hidden px-3 py-4 sm:px-4 lg:grid-cols-[1fr_340px] lg:px-6">
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="page-x grid min-h-0 flex-1 gap-4 overflow-hidden py-(--page-y) lg:grid-cols-[1fr_340px]">
               <div
                 className={cn(
-                  "flex min-h-0 flex-col",
+                  // min-w-0 keeps the board inside its grid track; without it the
+                  // horizontally scrolling lists widen the track under the activity panel.
+                  "flex min-h-0 min-w-0 flex-col",
                   tasks.view === "kanban" ? "overflow-hidden" : "overflow-auto",
                 )}
               >
-                <div className="pb-3" />
-
                 <div
                   className={cn(
                     "min-h-0 flex-1",
@@ -766,11 +794,17 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                 >
                   {tasks.view === "kanban" && (
                     <KanbanView
+                      boardId={tasks.activeBoardId}
                       board={tasks.board}
                       assigneeById={tasks.assigneeById}
                       labelById={tasks.labelById}
                       visibleTicketIdsByColumn={tasks.visibleTicketIdsByColumn}
+                      density={tasks.cardDensity}
                       onAddTask={tasks.openCreateModal}
+                      onAddList={tasks.openCreateListModal}
+                      onQuickAddTicket={tasks.quickCreateTicket}
+                      onRenameList={tasks.renameList}
+                      onFocusSearch={() => searchInputRef.current?.focus()}
                       canDeleteList={tasks.canDeleteList}
                       onDeleteList={tasks.handleDeleteList}
                       onTicketClick={tasks.openDetailsModal}
@@ -815,17 +849,11 @@ export function BoardsPageClient({ initialBoardId, initialBoards, initialAssigne
                 </div>
               </div>
 
-              <aside className="hidden min-h-0 overflow-hidden rounded-lg border border-border/60 bg-background/70 p-3 lg:flex lg:flex-col">
-                <BoardActivityFeed
-                  activity={boardActivity}
-                  loading={boardActivityLoading}
-                  onTicketClick={(ticketId) => {
-                    tasks.openDetailsModal(ticketId);
-                  }}
-                />
+              <aside className="surface-card hidden min-h-0 overflow-hidden p-3 lg:flex lg:flex-col">
+                {activityFeed}
               </aside>
             </div>
-          </motion.div>
+          </div>
         )}
       </SidebarInset>
 

@@ -5,6 +5,7 @@ const root = process.cwd();
 const server = await createServer({
   configFile: false,
   root,
+  cacheDir: resolve(root, "node_modules/.vite-audit"),
   resolve: { alias: [
     { find: "@/components/modules/modules-provider", replacement: resolve(root, "tests/previews/platform.tsx") },
     { find: "next/navigation", replacement: resolve(root, "tests/previews/platform.tsx") },

@@ -24,17 +24,18 @@ export function AssigneeMiniCard({
       type="button"
       variant="ghost"
       onClick={onClick}
+      aria-pressed={selected}
       className={cn(
         "h-auto min-w-44 justify-start rounded-xl border px-3 py-2 text-left",
-        "bg-card/70 transition-colors hover:bg-card",
+        "bg-surface-1 transition-colors duration-(--dur-fast) ease-(--ease-out) hover:bg-surface-hover",
         selected
-          ? "border-primary/60 shadow-[0_0_0_1px_hsl(var(--primary)/0.2)]"
-          : "border-border/70",
+          ? "border-primary/60 ring-1 ring-primary/20"
+          : "border-line",
       )}
     >
       <div className="flex items-center gap-2.5">
-        <Avatar className="h-8 w-8">
-          <AvatarFallback className="bg-primary/80 text-[10px] text-primary-foreground">
+        <Avatar className="size-8">
+          <AvatarFallback className="bg-primary/80 text-2xs text-primary-foreground">
             {initials}
           </AvatarFallback>
         </Avatar>

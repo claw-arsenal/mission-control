@@ -22,9 +22,9 @@ const splitRecipients = (value: string) => value.split(/[,;\n]/).map(value => va
 const date = (value: string | null) => value ? new Date(value).toLocaleString() : "Not checked yet";
 
 const BANNERS = {
-  running: { icon: IconCircleCheck, className: "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400" },
+  running: { icon: IconCircleCheck, className: "border-success/30 bg-success-soft text-success-fg" },
   paused: { icon: IconPlayerPause, className: "border-border bg-muted/30 text-muted-foreground" },
-  offline: { icon: IconAlertTriangle, className: "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-400" },
+  offline: { icon: IconAlertTriangle, className: "border-warning/30 bg-warning-soft text-warning-fg" },
 };
 
 function monitorState(status: Status): { tone: keyof typeof BANNERS; title: string } {
@@ -171,9 +171,9 @@ export function ReviewNotificationsSection() {
               : status.deliveries.map(delivery => <div key={delivery.id} className="px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="min-w-0 truncate text-sm font-medium">{delivery.channel === "email" ? "Outlook" : "Telegram"} · {delivery.recipient}</p>
-                  <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{delivery.status}</span>
+                  <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">{delivery.status}</span>
                 </div>
-                <p className="text-[11px] text-muted-foreground">{date(delivery.created_at)}</p>
+                <p className="text-2xs text-muted-foreground">{date(delivery.created_at)}</p>
                 {delivery.error && <p className="mt-1 text-xs text-destructive">{delivery.error}</p>}
               </div>)}
           </div>

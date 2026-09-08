@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { format } from "date-fns";
 import { parseRecurrenceRule, toRecurrenceRule } from "@/lib/agenda/recurrence";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -92,6 +92,7 @@ function buildFormFromEvent(event: AgendaEventSummary): Partial<AgendaEventFormD
 }
 
 export function AgendaClientWrapper() {
+  const reduceMotion = useReducedMotion();
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [processes, setProcesses] = useState<ProcessOption[]>([]);
   const [chats, setChats] = useState<ChatOption[]>([]);
@@ -554,15 +555,15 @@ export function AgendaClientWrapper() {
     <>
       <div className="@container/main relative flex flex-1 min-h-0 flex-col overflow-hidden">
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: contentReady ? 1 : 0 }}
-          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="flex flex-1 min-h-0 flex-col gap-4 pt-4 pb-4 md:gap-6"
+          initial={reduceMotion ? false : { opacity: 0 }}
+          animate={{ opacity: contentReady || reduceMotion ? 1 : 0 }}
+          transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+          className="page-x flex flex-1 min-h-0 flex-col gap-(--section-gap) py-(--page-y)"
         >
           <div className="shrink-0">
             <AgendaStatsCards />
           </div>
-          <div className="px-4 lg:px-6 flex-1 min-h-0">
+          <div className="flex-1 min-h-0">
             <AgendaPageClient
               onEditEvent={openEditEventModal}
               onCopyEvent={handleCopyEvent}
@@ -579,10 +580,10 @@ export function AgendaClientWrapper() {
 
         {!contentReady && (
           <motion.div
-            initial={{ opacity: 0 }}
+            initial={reduceMotion ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
+            transition={{ duration: reduceMotion ? 0 : 0.18 }}
           >
             <ContainerLoader label="Loading agenda…" />
           </motion.div>

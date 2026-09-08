@@ -19,8 +19,8 @@ type Props = { metric: MetricDef; globalWindow: WindowName | "saved"; refreshKey
 const DEFAULT_SETTINGS: MetricCardSettings = { override: "inherit", view: "chart" };
 const CHANGE_TONES = {
   neutral: "text-muted-foreground",
-  positive: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  negative: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
+  positive: "bg-success-soft text-success-fg",
+  negative: "bg-danger-soft text-danger-fg",
 };
 
 function ResultTable({ rows, metric }: { rows: Record<string, unknown>[]; metric: MetricDef }) {
@@ -102,7 +102,7 @@ export function MetricCard({ metric, globalWindow, refreshKey = 0, dataAsOf = nu
       {loading && !result ? <div role="status" className="min-h-56 space-y-5 p-4"><span className="sr-only">Loading {metric.name}</span><div className="h-44 rounded-md bg-muted/40 motion-safe:animate-pulse" /></div>
         : result ? view === "table" ? <ResultTable key={result.loadedAt} rows={result.rows} metric={metric} />
           : <MetricChart type={metric.chart_type} xColumn={metric.x_column} yColumns={metric.y_columns} rows={result.rows} valueFormat={metric.value_format} kpiAggregation={metric.kpi_aggregation} sql={metric.sql_text} /> : null}
-      {result?.truncated && <p role="status" className="mt-3 rounded-md border border-amber-500/40 p-2 text-xs">Result limit reached. Totals cover only returned rows. Narrow the range before interpreting this chart.</p>}
+      {result?.truncated && <p role="status" className="mt-3 rounded-md border border-warning/40 p-2 text-xs">Result limit reached. Totals cover only returned rows. Narrow the range before interpreting this chart.</p>}
       {partialCount > 0 && <p className="mt-2 text-xs text-muted-foreground">Latest {partialCount === 1 ? "period is" : `${partialCount} periods are`} incomplete and excluded from the change.</p>}
     </div>
     <div className="flex items-center justify-between gap-2 border-t px-4 py-2 sm:px-5">

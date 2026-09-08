@@ -211,30 +211,6 @@ export async function getBoardsPageData(): Promise<BoardHydration[]> {
   });
 }
 
-export async function getDashboardStats(): Promise<{
-  boards: number;
-  tickets: number;
-  logs: number;
-  agendaEvents: number;
-  processes: number;
-}> {
-  const sql = getSql();
-  const [boardsRow, ticketsRow, logsRow, agendaRow, processRow] = await Promise.all([
-    sql`SELECT COUNT(*)::int as count FROM boards`,
-    sql`SELECT COUNT(*)::int as count FROM tickets`,
-    sql`SELECT COUNT(*)::int as count FROM agent_logs`,
-    sql`SELECT COUNT(*)::int as count FROM agenda_events`,
-    sql`SELECT COUNT(*)::int as count FROM process_versions`,
-  ]);
-  return {
-    boards: (boardsRow[0]?.count as number) ?? 0,
-    tickets: (ticketsRow[0]?.count as number) ?? 0,
-    logs: (logsRow[0]?.count as number) ?? 0,
-    agendaEvents: (agendaRow[0]?.count as number) ?? 0,
-    processes: (processRow[0]?.count as number) ?? 0,
-  };
-}
-
 export type OverviewPoint = { date: string; created: number; completed: number; events: number };
 export type DashboardTask = {
   id: string;

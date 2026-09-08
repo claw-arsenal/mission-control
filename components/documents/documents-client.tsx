@@ -23,6 +23,7 @@ import {
   EyeIcon,
   EditIcon,
 } from "lucide-react";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -162,25 +163,34 @@ export function DocumentsClient() {
   const [renameOpen, setRenameOpen] = useState<null | { path: string }>(null);
   const [deleteOpen, setDeleteOpen] = useState<null | { path: string; kind: "file" | "folder" }>(null);
   const [authError, setAuthError] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const isDirty = content !== savedContent;
 
   const reloadTree = useCallback(async () => {
     try {
       const res = await fetch("/api/documents", { cache: "reload" });
       if (res.status === 401) { setAuthError(true); return; }
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`The documents request failed (${res.status}).`);
       const json = await res.json();
-      if (json.ok) setEntries(json.entries || []);
-    } catch { /* ignore */ }
+      if (!json.ok) throw new Error(typeof json.error === "string" ? json.error : "The document list could not be read.");
+      setEntries(json.entries || []);
+      setLoadError(null);
+    } catch (err) {
+      // Never render a failed load as an empty library.
+      setLoadError(err instanceof Error ? err.message : "Documents could not be loaded.");
+    }
   }, []);
 
   const reloadRecent = useCallback(async () => {
     try {
       const res = await fetch("/api/documents?recent=1&limit=12", { cache: "reload" });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`The recent documents request failed (${res.status}).`);
       const json = await res.json();
       if (json.ok) setRecent(json.recent || []);
-    } catch { /* ignore */ }
+    } catch (err) {
+      // Never render a failed load as an empty library.
+      setLoadError(err instanceof Error ? err.message : "Documents could not be loaded.");
+    }
   }, []);
 
   useEffect(() => {
@@ -371,6 +381,30 @@ export function DocumentsClient() {
   }, [selectedPath]);
   const isRichText = ext ? RICH_TEXT_EXTS.has(ext) : true;
 
+  if (loadError && !authError) {
+    return (
+      <div className="page-x flex flex-1 items-start py-(--page-y)">
+        <Alert variant="destructive" className="mx-auto w-full max-w-xl">
+          <AlertTitle>Documents could not be loaded</AlertTitle>
+          <AlertDescription>{loadError}</AlertDescription>
+          <AlertActions>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setLoadError(null);
+                void reloadTree();
+                void reloadRecent();
+              }}
+            >
+              Try again
+            </Button>
+          </AlertActions>
+        </Alert>
+      </div>
+    );
+  }
+
   if (authError) {
     return (
       <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
@@ -384,7 +418,7 @@ export function DocumentsClient() {
       {/* Sidebar tree */}
       <aside className="hidden w-72 shrink-0 border-r bg-muted/10 md:flex md:flex-col">
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          <span className="eyebrow">
             Files
           </span>
           <DropdownMenu>
@@ -423,7 +457,7 @@ export function DocumentsClient() {
             onDelete={(path, kind) => setDeleteOpen({ path, kind })}
           />
           {entries.length === 0 && (
-            <div className="px-3 py-6 text-center text-[11px] text-muted-foreground">
+            <div className="px-3 py-6 text-center text-2xs text-muted-foreground">
               No documents yet. <br />
               Use <span className="font-medium text-foreground">+ New</span> above.
             </div>
@@ -472,7 +506,7 @@ export function DocumentsClient() {
             {selectedPath && (
               <>
                 {isDirty && (
-                  <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                  <span className="text-2xs font-medium text-warning-fg">
                     Unsaved
                   </span>
                 )}
@@ -523,7 +557,7 @@ export function DocumentsClient() {
           {selectedPath && (
             <aside className="hidden w-72 shrink-0 border-l bg-muted/10 lg:flex lg:flex-col">
               <div className="border-b px-3 py-2">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                <span className="eyebrow">
                   Details
                 </span>
               </div>
@@ -538,23 +572,23 @@ export function DocumentsClient() {
                   <DetailRow label="Last edited" value={`${docMeta.last_edited_by_name} · ${relTime(docMeta.updated_at)}`} />
                 )}
 
-                <div className="mt-4 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                <div className="mt-4 mb-1.5 text-2xs font-bold uppercase tracking-widest text-muted-foreground">
                   Linked tickets ({linkedTickets.length})
                 </div>
                 {linkedTickets.length === 0 ? (
-                  <p className="text-[11px] text-muted-foreground/60">Not linked from any ticket yet.</p>
+                  <p className="text-2xs text-muted-foreground/60">Not linked from any ticket yet.</p>
                 ) : (
                   <div className="flex flex-col gap-1">
                     {linkedTickets.map((t) => (
                       <a
                         key={t.id}
                         href={`/boards?board=${t.board_id}&ticket=${t.id}`}
-                        className="flex items-start gap-2 rounded-md border border-border/60 bg-background px-2 py-1.5 text-[11px] transition-colors hover:bg-accent"
+                        className="flex items-start gap-2 rounded-md border border-line bg-background px-2 py-1.5 text-2xs transition-colors hover:bg-accent"
                       >
                         <LinkIcon className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium">{t.title}</p>
-                          <p className="truncate text-[10px] text-muted-foreground">{t.board_name}</p>
+                          <p className="truncate text-2xs text-muted-foreground">{t.board_name}</p>
                         </div>
                       </a>
                     ))}
@@ -652,7 +686,7 @@ function TabButton({
 function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="mb-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">{label}</div>
+      <div className="text-2xs font-medium uppercase tracking-wider text-muted-foreground/70">{label}</div>
       <div className={cn("text-xs text-foreground/90 break-all", mono && "font-mono")}>{value}</div>
     </div>
   );
@@ -693,7 +727,7 @@ function DocTree({
                   className="flex flex-1 items-center gap-1 truncate text-left"
                 >
                   {isOpen ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
-                  <FolderIcon className={cn("size-3.5 shrink-0", isOpen ? "text-amber-500" : "text-muted-foreground")} />
+                  <FolderIcon className={cn("size-3.5 shrink-0", isOpen ? "text-warning" : "text-muted-foreground")} />
                   <span className="truncate">{entry.name}</span>
                 </button>
                 <DropdownMenu>
@@ -793,7 +827,7 @@ function RecentGrid({ recent, onOpen }: { recent: RecentDoc[]; onOpen: (path: st
   return (
     <ScrollArea className="h-full">
       <div className="p-6">
-        <div className="mb-4 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <div className="mb-4 text-2xs font-bold uppercase tracking-widest text-muted-foreground">
           Recently edited
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -804,15 +838,15 @@ function RecentGrid({ recent, onOpen }: { recent: RecentDoc[]; onOpen: (path: st
               <button
                 key={doc.id}
                 onClick={() => onOpen(doc.relative_path)}
-                className="group flex items-start gap-3 rounded-lg border border-border/60 bg-background p-3 text-left transition-all hover:-translate-y-0.5 hover:border-border hover:shadow-md"
+                className="group flex items-start gap-3 rounded-lg border border-line bg-background p-3 text-left transition-all hover:-translate-y-0.5 hover:border-border hover:shadow-md"
               >
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted/40 transition-colors group-hover:bg-muted/80">
                   <Icon className="size-4 text-muted-foreground transition-colors group-hover:text-foreground" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{basename(doc.relative_path)}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{description}</p>
-                  <p className="mt-1 text-[10px] text-muted-foreground/70">
+                  <p className="truncate text-2xs text-muted-foreground">{description}</p>
+                  <p className="mt-1 text-2xs text-muted-foreground/70">
                     {bytes(doc.size_bytes)} · {relTime(doc.updated_at)}
                     {doc.last_edited_by_name ? ` · ${doc.last_edited_by_name}` : ""}
                   </p>
@@ -839,18 +873,18 @@ function HistoryView({ audit }: { audit: AuditRow[] }) {
       <ul className="divide-y px-4 py-4">
         {audit.map((row) => (
           <li key={row.id} className="flex items-start gap-3 py-2.5">
-            <div className="mt-0.5 size-2 shrink-0 rounded-full bg-blue-500" />
+            <div className="mt-0.5 size-2 shrink-0 rounded-full bg-info" />
             <div className="min-w-0 flex-1">
               <p className="text-xs">
                 <span className="font-medium text-foreground">{row.actor_name || row.actor_email || "Unknown"}</span>{" "}
                 <span className="text-muted-foreground">{humaniseEvent(row.event)}</span>
               </p>
               {row.details && (row.details as { from?: string; to?: string }).from && (
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {String((row.details as { from: string }).from)} → {String((row.details as { to: string }).to)}
                 </p>
               )}
-              <p className="text-[10px] text-muted-foreground/70">{new Date(row.occurred_at).toLocaleString()}</p>
+              <p className="text-2xs text-muted-foreground/70">{new Date(row.occurred_at).toLocaleString()}</p>
             </div>
           </li>
         ))}
@@ -934,7 +968,7 @@ function NewDocumentDialog({
           <DialogDescription>
             {parent ? <>Inside <span className="font-mono">{parent}/</span></> : "At the documents root."}
             {kind === "file" && (
-              <span className="mt-1 block text-[10px] text-muted-foreground/70">
+              <span className="mt-1 block text-2xs text-muted-foreground/70">
                 Tip: include the extension — <span className="font-mono">.md</span>, <span className="font-mono">.html</span>, <span className="font-mono">.js</span>, <span className="font-mono">.json</span>, <span className="font-mono">.sql</span>… whichever you need.
               </span>
             )}

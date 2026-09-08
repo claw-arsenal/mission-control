@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -307,11 +308,12 @@ export function ProcessesPageClient() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {tiedEvents.length > 0 && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
-              <p className="font-semibold text-amber-700 dark:text-amber-400 mb-1.5">
-                ⚠️ {tiedEvents.length} agenda event{tiedEvents.length === 1 ? "" : "s"} use this process:
+            <div className="rounded-lg border border-warning/30 bg-warning-soft px-4 py-3 text-sm">
+              <p className="mb-1.5 flex items-center gap-1.5 font-semibold text-warning-fg">
+                <IconAlertTriangle className="size-4 shrink-0" aria-hidden />
+                {tiedEvents.length} agenda event{tiedEvents.length === 1 ? "" : "s"} use this process:
               </p>
-              <ul className="list-disc pl-5 text-xs text-amber-600 dark:text-amber-400/80 space-y-0.5">
+              <ul className="list-disc space-y-0.5 pl-5 text-xs text-warning-fg/90">
                 {tiedEvents.map((e) => (
                   <li key={e.id}>{e.title}</li>
                 ))}

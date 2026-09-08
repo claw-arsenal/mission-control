@@ -20,7 +20,7 @@ export function MetaPill({ icon, label, onClick, className }: Props) {
         size="sm"
         onClick={onClick}
         className={cn(
-          "h-8 rounded-full border border-border/70 bg-muted/35 px-3 text-xs text-muted-foreground hover:bg-muted/55",
+          "h-8 rounded-full border border-line bg-surface-2 px-3 text-xs text-muted-foreground hover:bg-surface-hover",
           className,
         )}
       >
@@ -33,7 +33,7 @@ export function MetaPill({ icon, label, onClick, className }: Props) {
   return (
     <div
       className={cn(
-        "inline-flex h-8 items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-3 text-xs text-muted-foreground",
+        "inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface-2 px-3 text-xs text-muted-foreground",
         className,
       )}
     >

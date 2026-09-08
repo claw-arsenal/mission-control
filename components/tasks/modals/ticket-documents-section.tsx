@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+  AlertTriangleIcon,
   FileTextIcon,
   FileCodeIcon,
   FileIcon,
@@ -13,8 +14,11 @@ import {
   GlobeIcon,
   FolderOpenIcon,
 } from "lucide-react";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { LinkDocumentDialog } from "@/components/tasks/modals/link-document-dialog";
 import { useModules } from "@/components/modules/modules-provider";
 
@@ -111,11 +115,13 @@ export function TicketDocumentsSection({ ticketId }: Props) {
   const [docs, setDocs] = useState<LinkedDocument[]>([]);
   const [links, setLinks] = useState<TicketLink[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!ticketId || !moduleEnabled) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const [docsRes, linksRes] = await Promise.all([
         fetch("/api/tasks", {
@@ -131,6 +137,11 @@ export function TicketDocumentsSection({ ticketId }: Props) {
       ]);
       if (docsRes.ok) setDocs(docsRes.documents || []);
       if (linksRes.ok) setLinks(linksRes.links || []);
+      if (!docsRes.ok || !linksRes.ok) {
+        setLoadError(docsRes.error || linksRes.error || "The request did not complete.");
+      }
+    } catch {
+      setLoadError("Could not reach the server.");
     } finally {
       setLoading(false);
     }
@@ -166,12 +177,35 @@ export function TicketDocumentsSection({ ticketId }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-        <LinkIcon className="size-3" /> Documents &amp; links ({docs.length + links.length})
+      <Label className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+        <LinkIcon className="size-3" aria-hidden /> Documents and links ({docs.length + links.length})
       </Label>
 
-      {docs.length === 0 && links.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">No documents or links yet.</p>
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertTriangleIcon />
+          <AlertTitle>Documents and links are unavailable</AlertTitle>
+          <AlertDescription>{loadError}</AlertDescription>
+          <AlertActions>
+            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+              Try again
+            </Button>
+          </AlertActions>
+        </Alert>
+      ) : loading && docs.length === 0 && links.length === 0 ? (
+        <div className="flex flex-col gap-1.5" aria-busy="true" aria-label="Loading documents and links">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : docs.length === 0 && links.length === 0 ? (
+        <Empty className="min-h-0 border-line py-4">
+          <EmptyHeader>
+            <EmptyDescription className="text-xs">
+              No documents or links yet. Link a document, a URL, or a file path to keep the context
+              with the ticket.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {docs.map((d) => {
@@ -179,32 +213,36 @@ export function TicketDocumentsSection({ ticketId }: Props) {
             return (
               <li
                 key={d.id}
-                className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-2.5 py-1.5 text-xs"
+                className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-xs"
               >
-                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{d.relative_path}</p>
-                  <p className="truncate text-[10px] text-muted-foreground">
+                  <p className="truncate text-2xs text-muted-foreground">
                     {bytes(d.size_bytes)}
                     {d.last_edited_by_name && ` · edited ${relTime(d.updated_at)} by ${d.last_edited_by_name}`}
                   </p>
                 </div>
-                <a
-                  href={`/documents?path=${encodeURIComponent(d.relative_path)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-muted-foreground transition-colors hover:text-foreground"
-                  title="Open in Documents"
-                >
-                  <ExternalLinkIcon className="size-3.5" />
-                </a>
-                <button
+                <Button variant="ghost" size="icon-xs" asChild>
+                  <a
+                    href={`/documents?path=${encodeURIComponent(d.relative_path)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={`Open ${d.relative_path} in Documents`}
+                    title="Open in Documents"
+                  >
+                    <ExternalLinkIcon />
+                  </a>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-danger-fg"
+                  aria-label={`Unlink ${d.relative_path}`}
                   onClick={() => void unlink(d.id)}
-                  className="text-muted-foreground transition-colors hover:text-destructive"
-                  title="Unlink"
                 >
-                  <XIcon className="size-3.5" />
-                </button>
+                  <XIcon />
+                </Button>
               </li>
             );
           })}
@@ -215,52 +253,58 @@ export function TicketDocumentsSection({ ticketId }: Props) {
             return (
               <li
                 key={l.id}
-                className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-2.5 py-1.5 text-xs"
+                className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-xs"
               >
-                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{display}</p>
-                  <p className="truncate font-mono text-[10px] text-muted-foreground">{l.url}</p>
+                  <p className="truncate font-mono text-2xs text-muted-foreground">{l.url}</p>
                 </div>
                 {isPath ? (
-                  <a
-                    href={`mc-explorer:${encodeURIComponent(l.url)}`}
-                    onClick={() => {
-                      // The href still fires the mc-explorer: handler for anyone
-                      // who installed it. Regardless, copy the path so it always
-                      // does something useful even without the handler.
-                      const ok = copyText(l.url);
-                      if (ok) {
-                        toast.success("Path copied to clipboard", {
-                          description: "If Explorer didn't open, paste it into Explorer's address bar (Win+E, then Ctrl+L).",
-                        });
-                      } else {
-                        toast.error("Couldn't copy automatically — here's the path", { description: l.url });
-                      }
-                    }}
-                    className="text-muted-foreground transition-colors hover:text-foreground"
-                    title="Copy path (and open in Explorer if the one-time setup is installed)"
-                  >
-                    <ExternalLinkIcon className="size-3.5" />
-                  </a>
+                  <Button variant="ghost" size="icon-xs" asChild>
+                    <a
+                      href={`mc-explorer:${encodeURIComponent(l.url)}`}
+                      onClick={() => {
+                        // The href still fires the mc-explorer: handler for anyone
+                        // who installed it. Regardless, copy the path so it always
+                        // does something useful even without the handler.
+                        const ok = copyText(l.url);
+                        if (ok) {
+                          toast.success("Path copied to clipboard", {
+                            description: "If Explorer didn't open, paste it into Explorer's address bar (Win+E, then Ctrl+L).",
+                          });
+                        } else {
+                          toast.error("Couldn't copy automatically, here's the path", { description: l.url });
+                        }
+                      }}
+                      aria-label={`Copy path ${l.url}`}
+                      title="Copy path (and open in Explorer if the one-time setup is installed)"
+                    >
+                      <ExternalLinkIcon />
+                    </a>
+                  </Button>
                 ) : (
-                  <a
-                    href={l.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="text-muted-foreground transition-colors hover:text-foreground"
-                    title="Open link"
-                  >
-                    <ExternalLinkIcon className="size-3.5" />
-                  </a>
+                  <Button variant="ghost" size="icon-xs" asChild>
+                    <a
+                      href={l.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      aria-label={`Open link ${display}`}
+                      title="Open link"
+                    >
+                      <ExternalLinkIcon />
+                    </a>
+                  </Button>
                 )}
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-danger-fg"
+                  aria-label={`Remove link ${display}`}
                   onClick={() => void removeLink(l.id)}
-                  className="text-muted-foreground transition-colors hover:text-destructive"
-                  title="Remove link"
                 >
-                  <XIcon className="size-3.5" />
-                </button>
+                  <XIcon />
+                </Button>
               </li>
             );
           })}
@@ -270,7 +314,7 @@ export function TicketDocumentsSection({ ticketId }: Props) {
       <Button
         size="sm"
         variant="outline"
-        className="self-start gap-1.5 text-xs"
+        className="gap-1.5 self-start text-xs"
         onClick={() => setPickerOpen(true)}
         disabled={loading}
       >

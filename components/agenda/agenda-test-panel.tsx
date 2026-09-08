@@ -242,8 +242,8 @@ export function AgendaTestPanel() {
           size="sm"
           className={[
             "gap-2 shadow-lg cursor-pointer",
-            failedCount > 0 ? "bg-red-600 hover:bg-red-700 text-white" :
-            passedCount > 0 && !isRunning ? "bg-emerald-600 hover:bg-emerald-700 text-white" :
+            failedCount > 0 ? "bg-danger text-background hover:bg-danger/90" :
+            passedCount > 0 && !isRunning ? "bg-success text-background hover:bg-success/90" :
             "bg-primary hover:bg-primary/90 text-primary-foreground",
           ].join(" ")}
         >
@@ -355,11 +355,11 @@ export function AgendaTestPanel() {
           {/* Footer */}
           <div className="px-5 py-2.5 border-t bg-muted/10 shrink-0 space-y-1">
             {waitingApprovalForTestId && (
-              <p className="text-[11px] text-amber-600 dark:text-amber-400 text-center font-medium">
+              <p className="text-2xs text-warning-fg text-center font-medium">
                 Paused after current test. Review logs, then approve to continue with reset + next test.
               </p>
             )}
-            <p className="text-[10px] text-muted-foreground text-center">
+            <p className="text-2xs text-muted-foreground text-center">
               Tests run against live database. Some tests (scheduler polling) take up to 3 min.
               Gateway restarts do not break the test run — results are stored in component state.
             </p>

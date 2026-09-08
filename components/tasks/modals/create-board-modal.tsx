@@ -1,5 +1,6 @@
 "use client";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AlertTriangleIcon } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 
 type Props = {
@@ -51,7 +53,7 @@ export function CreateBoardModal({
         <div className="flex flex-col gap-4 py-1">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="cb-board-name">
-              Board name <span className="text-destructive">*</span>
+              Board name <span className="text-danger-fg">*</span>
             </Label>
             <Input
               id="cb-board-name"
@@ -73,7 +75,13 @@ export function CreateBoardModal({
             />
           </div>
 
-          {error && <p className="text-xs text-destructive">{error}</p>}
+          {error && (
+            <Alert variant="destructive">
+              <AlertTriangleIcon />
+              <AlertTitle>That did not work</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
         </div>
 
         <DialogFooter className="pt-1">

@@ -24,9 +24,9 @@ function formatDebugValue(value: unknown) {
 }
 
 const sourceClassName: Record<AgentFieldSource, string> = {
-  runtime: "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  database: "border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  fallback: "border-zinc-500/40 bg-zinc-500/15 text-zinc-700 dark:text-zinc-300",
+  runtime: "border-success/40 bg-success-soft text-success-fg",
+  database: "border-warning/40 bg-warning-soft text-warning-fg",
+  fallback: "border-line-strong bg-surface-2 text-muted-foreground",
 };
 
 export function AgentDebugOverlay({ agent, className }: AgentDebugOverlayProps) {

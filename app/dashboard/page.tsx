@@ -1,21 +1,42 @@
 import { AppSidebar } from "@/components/layout/app-sidebar";
-import { DashboardGreeting } from "@/components/dashboard/dashboard-greeting";
-import { KanbanOverview } from "@/components/dashboard/kanban-overview";
+import { PageHeader } from "@/components/layout/page-header";
+import { AttentionPanel } from "@/components/dashboard/attention-panel";
+import { DashboardIntro } from "@/components/dashboard/dashboard-intro";
 import { DashboardTasksTable } from "@/components/dashboard/dashboard-tasks-table";
-import { SectionCards } from "@/components/dashboard/section-cards";
-import { SiteHeader } from "@/components/dashboard/site-header";
-import { getDashboardOverview, getDashboardStats } from "@/lib/db/server-data";
+import { RefreshControl } from "@/components/dashboard/refresh-control";
+import { StatStrip } from "@/components/dashboard/stat-strip";
+import { ThroughputChart } from "@/components/dashboard/throughput-chart";
+import { getDashboardPulse, type DashboardPulse } from "@/lib/db/dashboard-pulse";
+import { getDashboardOverview } from "@/lib/db/server-data";
 import { getSession } from "@/lib/auth/session";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { PageReveal } from "@/components/ui/page-reveal";
 
 export const dynamic = "force-dynamic";
 
+/** One honest sentence for the intro. Null when there is nothing to say. */
+function summarize(pulse: DashboardPulse, ownOpen: number): string | null {
+  const parts: string[] = [];
+  if (pulse.tickets) {
+    if (pulse.tickets.overdue > 0) parts.push(`${pulse.tickets.overdue} overdue`);
+    if (pulse.tickets.dueToday > 0) parts.push(`${pulse.tickets.dueToday} due today`);
+  }
+  if (pulse.agenda && pulse.agenda.failed7d > 0) {
+    parts.push(`${pulse.agenda.failed7d} failed ${pulse.agenda.failed7d === 1 ? "run" : "runs"} this week`);
+  }
+  if (pulse.services && pulse.services.error > 0) {
+    parts.push(`${pulse.services.error} ${pulse.services.error === 1 ? "service" : "services"} reporting errors`);
+  }
+  if (parts.length > 0) return `Across the workspace: ${parts.join(", ")}.`;
+  if (ownOpen > 0) return `${ownOpen} open ${ownOpen === 1 ? "ticket" : "tickets"} assigned to you. Nothing is overdue.`;
+  return null;
+}
+
 export default async function DashboardPage() {
   const session = await getSession();
-  const [overview, stats] = await Promise.all([
+  const [overview, pulse] = await Promise.all([
     getDashboardOverview(session?.email ?? null),
-    getDashboardStats(),
+    getDashboardPulse(),
   ]);
   const firstName = session?.name?.trim().split(/\s+/)[0] ?? null;
 
@@ -23,48 +44,26 @@ export default async function DashboardPage() {
     <SidebarProvider
       style={
         {
-          "--sidebar-width": "calc(var(--spacing) * 72)",
-          "--header-height": "calc(var(--spacing) * 14)",
+          "--sidebar-width": "calc(var(--spacing) * 68)",
         } as React.CSSProperties
       }
     >
       <AppSidebar variant="inset" initialUser={null} />
       <SidebarInset>
-        <SiteHeader />
-        <div className="flex flex-1 flex-col">
-          <div className="@container/main flex flex-1 flex-col gap-2">
-            <PageReveal label="Loading dashboard…" className="py-4 md:py-6">
-              <div className="flex flex-col gap-4 md:gap-6">
-                {/* Row 0: Greeting */}
-                <div className="px-4 lg:px-6">
-                  <DashboardGreeting
-                    name={firstName}
-                    openTickets={overview.totals.openTickets}
-                    agendaEvents={overview.totals.agendaEvents}
-                  />
-                </div>
+        <PageHeader page="Dashboard" actions={<RefreshControl loadedAt={pulse.loadedAt} />} />
+        <div className="@container/main flex flex-1 flex-col">
+          <PageReveal label="Loading dashboard…" className="page-x flex flex-col gap-(--section-gap) py-(--page-y)">
+            <DashboardIntro name={firstName} summary={summarize(pulse, overview.totals.openTickets)} />
 
-                {/* Row 1: Total counts */}
-                <SectionCards
-                  boards={stats.boards}
-                  tickets={stats.tickets}
-                  agendaEvents={stats.agendaEvents}
-                  processes={stats.processes}
-                  logs={stats.logs}
-                />
+            <StatStrip pulse={pulse} series={overview.chart} />
 
-                {/* Row 2: Kanban overview chart */}
-                <KanbanOverview
-                  data={overview.chart}
-                  totalTickets={overview.totals.tickets}
-                  agendaEvents={overview.totals.agendaEvents}
-                />
+            <div className="grid gap-(--section-gap) @4xl/main:grid-cols-[minmax(0,1fr)_minmax(18rem,21rem)]">
+              <ThroughputChart data={overview.chart} />
+              <AttentionPanel items={pulse.attention} now={pulse.loadedAt} />
+            </div>
 
-                {/* Row 3: User's open tasks */}
-                <DashboardTasksTable tasks={overview.tasks} />
-              </div>
-            </PageReveal>
-          </div>
+            <DashboardTasksTable tasks={overview.tasks} />
+          </PageReveal>
         </div>
       </SidebarInset>
     </SidebarProvider>

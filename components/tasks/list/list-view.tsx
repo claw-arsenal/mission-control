@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { type Assignee, type BoardState, type Ticket, formatDue, toneColor } from "@/types/tasks";
 import { cn } from "@/lib/utils";
+import { MoreHorizontalIcon } from "lucide-react";
 import { Empty, EmptyDescription, EmptyFooter, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 
 type Props = {
@@ -82,18 +83,24 @@ export function ListView({
             return (
               <TableRow
                 key={ticket.id}
-                className="cursor-pointer hover:bg-muted/50 transition-colors"
-                onClick={() => onTicketClick(ticket.id)}
+                className="relative cursor-pointer transition-colors duration-(--dur-fast) ease-(--ease-out) hover:bg-surface-hover"
               >
                 <TableCell>
-                  <button type="button" className="rounded text-left text-sm font-medium line-clamp-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={(event) => { event.stopPropagation(); onTicketClick(ticket.id); }}>{ticket.title}</button>
+                  {/* The title button stretches over the row so the row is keyboard reachable. */}
+                  <button
+                    type="button"
+                    className="line-clamp-1 rounded text-left text-sm font-medium after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    onClick={(event) => { event.stopPropagation(); onTicketClick(ticket.id); }}
+                  >
+                    {ticket.title}
+                  </button>
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">
                     {column && (
                       <span className={cn("h-2 w-2 rounded-full shrink-0", toneColor[column.tone])} />
                     )}
-                    <span className="text-sm text-muted-foreground">{column?.title ?? "—"}</span>
+                    <span className="text-sm text-muted-foreground">{column?.title ?? "None"}</span>
                   </div>
                 </TableCell>
                 <TableCell>
@@ -116,7 +123,7 @@ export function ListView({
                       )}
                     </div>
                   ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
+                    <span className="text-xs text-muted-foreground">None</span>
                   )}
                 </TableCell>
                 <TableCell>
@@ -125,8 +132,9 @@ export function ListView({
                       const a = assigneeById[id];
                       if (!a) return null;
                       return (
-                        <Avatar key={id} className="h-5 w-5 border border-background">
-                          <AvatarFallback style={{ backgroundColor: a.color }} className="text-white text-[10px]">
+                        <Avatar key={id} className="size-5 border border-background" title={a.name}>
+                          {/* Assignee colour is per-entity data, so it stays an inline style. */}
+                          <AvatarFallback style={{ backgroundColor: a.color, color: "#fff" }} className="text-2xs">
                             {a.initials}
                           </AvatarFallback>
                         </Avatar>
@@ -137,12 +145,12 @@ export function ListView({
                 <TableCell>
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="flex justify-end"
+                    className="relative z-10 flex justify-end"
                   >
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-7 w-7">
-                          <KebabIcon />
+                        <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${ticket.title}`}>
+                          <MoreHorizontalIcon className="size-3.5" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
@@ -164,15 +172,5 @@ export function ListView({
         </TableBody>
       </Table>
     </Card>
-  );
-}
-
-function KebabIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
-      <circle cx="12" cy="5" r="1.5" />
-      <circle cx="12" cy="12" r="1.5" />
-      <circle cx="12" cy="19" r="1.5" />
-    </svg>
   );
 }

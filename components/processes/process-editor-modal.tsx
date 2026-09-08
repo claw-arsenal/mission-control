@@ -128,7 +128,7 @@ function StepIndicator({ currentStep, canAdvanceTo, onStepClick }: { currentStep
             ].join(" ")}
           >
             <div className={[
-              "flex items-center justify-center size-6 rounded-full text-[10px] font-bold shrink-0",
+              "flex items-center justify-center size-6 rounded-full text-2xs font-bold shrink-0",
               isLocked
                 ? "bg-muted-foreground/10 text-muted-foreground/40"
                 : isActive
@@ -139,7 +139,7 @@ function StepIndicator({ currentStep, canAdvanceTo, onStepClick }: { currentStep
             ].join(" ")}>
               {isDone ? <IconCheck className="size-3" /> : i + 1}
             </div>
-            <span className="text-[11px] font-semibold leading-tight truncate">{step.label}</span>
+            <span className="text-2xs font-semibold leading-tight truncate">{step.label}</span>
           </button>
         );
       })}
@@ -428,7 +428,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
             {/* Instruction field */}
             <div className="px-4 pt-3 pb-3">
               <div className="rounded-xl border bg-background px-3 py-3 flex flex-col gap-2">
-                <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                <Label className="text-2xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
                   Instruction
                 </Label>
                 <Textarea
@@ -444,12 +444,12 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
             {/* Settings row */}
             <div className="px-4 pb-4">
               <div className="rounded-xl border bg-muted/10 px-3 py-3">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                <p className="text-2xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
                   Optional overrides
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="flex flex-col gap-1 min-w-0">
-                  <Label className="text-[10px] text-muted-foreground/70 font-medium flex items-center gap-1">
+                  <Label className="text-2xs text-muted-foreground/70 font-medium flex items-center gap-1">
                     <IconCode className="size-2.5" />
                     Skill
                   </Label>
@@ -470,7 +470,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
                 </div>
 
                 <div className="flex flex-col gap-1 min-w-0">
-                  <Label className="text-[10px] text-muted-foreground/70 font-medium flex items-center gap-1">
+                  <Label className="text-2xs text-muted-foreground/70 font-medium flex items-center gap-1">
                     <IconRobot className="size-2.5" />
                     Agent
                   </Label>
@@ -491,7 +491,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
                 </div>
 
                 <div className="flex flex-col gap-1 min-w-0">
-                  <Label className="text-[10px] text-muted-foreground/70 font-medium flex items-center gap-1">
+                  <Label className="text-2xs text-muted-foreground/70 font-medium flex items-center gap-1">
                     <IconCpu className="size-2.5" />
                     Model
                   </Label>
@@ -504,7 +504,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
                         {s.modelOverride
                           ? <span className="flex gap-1 items-center truncate">
                               <span className="font-medium truncate">{models.find((m) => m.id === s.modelOverride)?.alias ?? s.modelOverride}</span>
-                              <span className="text-muted-foreground text-[10px] shrink-0">({getProviderLabel(s.modelOverride)})</span>
+                              <span className="text-muted-foreground text-2xs shrink-0">({getProviderLabel(s.modelOverride)})</span>
                             </span>
                           : "Default"}
                       </SelectValue>
@@ -588,7 +588,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
           return (
             <div key={s.id} className="rounded-lg border bg-card px-4 py-3">
               <div className="flex items-center gap-2 mb-1">
-                <Badge variant="outline" className="size-5 p-0 flex items-center justify-center text-[9px] font-bold shrink-0">
+                <Badge variant="outline" className="size-5 p-0 flex items-center justify-center text-2xs font-bold shrink-0">
                   {i + 1}
                 </Badge>
                 <span className="text-sm font-semibold truncate">{s.title || "Untitled step"}</span>
@@ -596,7 +596,7 @@ export function ProcessEditorModal({ open, initialData, agents = EMPTY_AGENTS, s
               {s.instruction && (
                 <p className="text-xs text-muted-foreground line-clamp-1 mb-1.5">{s.instruction}</p>
               )}
-              <div className="flex gap-3 text-[10px] text-muted-foreground">
+              <div className="flex gap-3 text-2xs text-muted-foreground">
                 <span>Skill: {skillName}</span>
                 <span>Agent: {agentName}</span>
                 <span>Model: {modelName}</span>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,6 +61,7 @@ export function AllowedUsersSection({ currentEmail }: { currentEmail: string | n
 
   // Remove confirmation
   const [removeTarget, setRemoveTarget] = useState<AllowedUser | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -70,12 +72,15 @@ export function AllowedUsersSection({ currentEmail }: { currentEmail: string | n
         setUsers([]);
         return;
       }
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`The user list request failed (${res.status}).`);
       const j = await res.json();
-      if (j.ok) {
-        setForbidden(false);
-        setUsers(j.users || []);
-      }
+      if (!j.ok) throw new Error(typeof j.error === "string" ? j.error : "The user list could not be read.");
+      setForbidden(false);
+      setUsers(j.users || []);
+      setLoadError(null);
+    } catch (err) {
+      // "No users." on a failed request would be a lie.
+      setLoadError(err instanceof Error ? err.message : "The user list could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -148,9 +153,17 @@ export function AllowedUsersSection({ currentEmail }: { currentEmail: string | n
       </div>
 
       {forbidden ? (
-        <div className="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">
+        <div className="rounded-xl border border-line bg-card p-6 text-center text-sm text-muted-foreground">
           You need the admin role to view this section.
         </div>
+      ) : loadError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Users could not be loaded</AlertTitle>
+          <AlertDescription>{loadError}</AlertDescription>
+          <AlertActions>
+            <Button size="sm" variant="outline" onClick={() => void reload()}>Try again</Button>
+          </AlertActions>
+        </Alert>
       ) : loading ? (
         <div className="flex items-center justify-center rounded-xl border bg-card p-8 text-xs text-muted-foreground">
           <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading…
@@ -206,12 +219,12 @@ export function AllowedUsersSection({ currentEmail }: { currentEmail: string | n
                       <div className="flex items-center gap-2">
                         <p className="truncate text-sm font-medium">{u.display_name || u.email}</p>
                         {isMe && (
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
                             you
                           </span>
                         )}
                       </div>
-                      <p className="truncate text-[11px] text-muted-foreground">
+                      <p className="truncate text-2xs text-muted-foreground">
                         {u.email} · last signed in {relTime(u.last_signed_in_at)}
                       </p>
                     </div>

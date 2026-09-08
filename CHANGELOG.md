@@ -5,6 +5,34 @@ All notable changes to Mission Control are documented here.
 
 ## Unreleased ? 2026-09-07
 
+### Design system
+
+- New shared primitives: `Alert` (with status variants and an actions slot), `Spinner`, `Progress`, and `Stepper`. `Badge` gained success, warning and info variants, and `Skeleton` only animates under `motion-safe`.
+- A semantic token layer (surfaces, hairlines, elevation, and a fixed status vocabulary) now backs the UI, so status colour no longer clashes with the user's chosen accent. Raw palette classes fell by half and off-scale font sizes by a third.
+- One tooltip provider at the app root, one spinner, and route-level skeletons for the dashboard and boards.
+- Documented in [DESIGN.md](DESIGN.md), including the rule that a failed request must never render as an empty state.
+
+### Across the app
+
+- Every page that loads data on mount now reports a failure with a retry, instead of showing "nothing here". Fixed on agents, services, agenda stats, documents, allowed users, board activity, the notifications inbox, and the module list.
+- A failed module list no longer leaves pages waiting on a skeleton forever; it settles and explains itself.
+- The notifications inbox uses real tabs, so it is reachable and readable by keyboard.
+- Settings lost its duplicate page title, gained a keyboard-navigable section rail, uses the Switch primitive for its three toggles (fixing a light-only thumb in dark mode), stacks its rows on narrow screens, and opens the section named in the URL, so /settings#modules lands on Modules.
+- The shell is consistent: one page header everywhere, the sidebar no longer jumps 16px between the dashboard and every other page, and the error and not-found pages keep the navigation instead of stranding you.
+- Removed dead code: three unused agent components, the approvals stub, three unused layout files, and 500 lines of CSS for a calendar library the app no longer renders.
+- New preview fixtures for reviewing the UI without a database or sign-in: `node scripts/preview-boards.mjs` serves the full boards page and a page-by-page fixture at `/tests/previews/pages.html`, where `?fail=1` forces every request to fail so error states can be checked.
+- The agenda month view reads as a day list on phones, where a seven-column grid truncated every title, and an empty month says so instead of showing a blank grid.
+- The logs table becomes one card per entry below medium widths, and its five filters move into a sheet, so the main observability screen is usable on a phone.
+- No raw Tailwind palette classes or off-scale font sizes remain in the interface: both counts are now zero, down from 141 and 271.
+
+### Kanban board
+
+- Long lists now page in as you scroll: each list renders 25 cards and reveals more as the end comes into view, with a "Show more" fallback and skeleton so 500-ticket boards stay smooth.
+- Add tickets inline from any list: Enter saves a title-only ticket at the foot of the list and keeps the composer open for the next one; "Details" opens the full editor.
+- Rename a list in place (double-click its title or use its menu), collapse lists into a slim rail that still accepts drops (remembered per board), and choose a comfortable or compact card density from the View menu.
+- Keyboard layer: `n` adds a ticket, `/` focuses search, `?` opens the shortcut reference; shortcuts stay quiet while typing or when a dialog is open.
+- Visual refresh on the existing tokens: quieter list surfaces with a tone dot and count pill, cards whose actions surface on hover, due dates coloured by urgency (past due, today), edge fades on the horizontal scroller, an "Add list" ghost column, and clearer drop targets and empty states.
+
 - Discover supported modules from installed skill capabilities; preserve enabled preferences when a skill is missing or disabled.
 - Make module disabling reversible and preserve all module data. New optional modules start disabled.
 - Add admin review notification settings for Outlook skill email and Telegram, with recipient validation, readiness, worker health and recent delivery outcomes.

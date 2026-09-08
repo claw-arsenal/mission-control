@@ -1,157 +1,157 @@
-"use client"
+import Link from "next/link"
+import { IconArrowRight, IconArrowUpRight } from "@tabler/icons-react"
 
-import * as React from "react"
-import { useRouter } from "next/navigation"
-import { IconArrowRight, IconCircleCheckFilled } from "@tabler/icons-react"
-
+import type { DashboardTask } from "@/lib/db/server-data"
 import { formatDue } from "@/types/tasks"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Card, CardAction, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { cn } from "@/lib/utils"
 
-export type DashboardTask = {
-  id: string
-  title: string
-  status: string
-  colorKey: string
-  priority: string
-  dueDate: string | null
-  done: boolean
-  boardId: string
-  boardName: string
+export type { DashboardTask }
+
+const PRIORITY_DOT: Record<string, string> = {
+  urgent: "bg-danger",
+  high: "bg-warning",
+  medium: "bg-info",
+  low: "bg-muted-foreground/50",
 }
 
-const PRIORITY_CLASS: Record<string, string> = {
-  urgent: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
-  high: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300",
-  medium: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  low: "border-slate-500/30 bg-slate-500/10 text-slate-600 dark:text-slate-300",
+const STATUS_DOT: Record<string, string> = {
+  blue: "bg-info",
+  info: "bg-info",
+  amber: "bg-warning",
+  warning: "bg-warning",
+  emerald: "bg-success",
+  success: "bg-success",
+  green: "bg-success",
+  red: "bg-danger",
+  violet: "bg-primary",
+  purple: "bg-primary",
 }
 
-const DOT_BY_KEY: Record<string, string> = {
-  blue: "bg-blue-500",
-  info: "bg-blue-500",
-  amber: "bg-amber-500",
-  warning: "bg-amber-500",
-  emerald: "bg-emerald-500",
-  success: "bg-emerald-500",
-  green: "bg-emerald-500",
-  red: "bg-red-500",
-  violet: "bg-violet-500",
-  purple: "bg-violet-500",
-}
+type DueState = "overdue" | "today" | "later" | "none"
 
-function dueTone(dueDate: string | null) {
-  if (!dueDate) return "text-muted-foreground"
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+function dueState(dueDate: string | null, today: Date): DueState {
+  if (!dueDate) return "none"
+  const start = new Date(today)
+  start.setHours(0, 0, 0, 0)
   const due = new Date(`${dueDate}T00:00:00`)
-  if (due < today) return "text-red-600 dark:text-red-400 font-medium"
-  if (due.getTime() === today.getTime()) return "text-amber-600 dark:text-amber-400 font-medium"
-  return "text-muted-foreground"
+  if (Number.isNaN(due.getTime())) return "none"
+  if (due < start) return "overdue"
+  if (due.getTime() === start.getTime()) return "today"
+  return "later"
 }
 
-export function DashboardTasksTable({ tasks }: { tasks: DashboardTask[] }) {
-  const router = useRouter()
+const DUE_CLASS: Record<DueState, string> = {
+  overdue: "text-danger-fg font-medium",
+  today: "text-warning-fg font-medium",
+  later: "text-foreground",
+  none: "text-muted-foreground",
+}
 
-  const goToTicket = React.useCallback(
-    (task: DashboardTask) => {
-      router.push(`/boards?board=${task.boardId}&ticket=${task.id}`)
-    },
-    [router],
-  )
+function dueLabel(task: DashboardTask, state: DueState): string {
+  if (state === "none") return "No due date"
+  if (state === "today") return "Today"
+  return formatDue(task.dueDate)
+}
 
+type Props = {
+  tasks: DashboardTask[]
+  /** Injected for deterministic rendering in tests. */
+  today?: Date
+}
+
+/**
+ * The signed-in user's open tickets, soonest due first. The title is a real
+ * link stretched over the row, so the row is clickable and keyboard reachable.
+ */
+export function DashboardTasksTable({ tasks, today = new Date() }: Props) {
   return (
-    <Card className="mx-4 lg:mx-6">
-      <CardHeader className="border-b">
-        <CardTitle>Your Tasks</CardTitle>
-        <CardDescription>Open tickets that need your attention, soonest due first</CardDescription>
-        <CardAction>
-          <Button variant="outline" size="sm" onClick={() => router.push("/boards")}>
-            View boards
-            <IconArrowRight />
+    <Card className="@container/tasks gap-0 py-0">
+      <CardHeader className="gap-1 border-b border-line py-5">
+        <CardTitle className="col-span-2 flex items-center gap-2 text-md @lg/card-header:col-span-1">
+          Your tasks
+          {tasks.length > 0 ? (
+            <span className="text-sm font-normal tabular-nums text-muted-foreground">{tasks.length}</span>
+          ) : null}
+        </CardTitle>
+        <CardDescription className="col-span-2 @lg/card-header:col-span-1">Open tickets assigned to you, soonest due first</CardDescription>
+        <CardAction className="col-span-2 row-start-3 justify-self-start @lg/card-header:col-span-1 @lg/card-header:col-start-2 @lg/card-header:row-span-2 @lg/card-header:row-start-1 @lg/card-header:justify-self-end">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/boards" prefetch={false}>
+              View boards
+              <IconArrowRight aria-hidden />
+            </Link>
           </Button>
         </CardAction>
       </CardHeader>
+
       {tasks.length === 0 ? (
-        <div className="px-4 lg:px-6">
-          <Empty className="min-h-36 rounded-md bg-muted/10">
-            <EmptyHeader>
-              <EmptyTitle>All clear 🎉</EmptyTitle>
-              <EmptyDescription>
-                No open tickets right now. Create one from Boards to get rolling.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+        <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+          <p className="text-sm font-medium text-foreground">You&apos;re all caught up</p>
+          <p className="max-w-[40ch] text-xs text-muted-foreground">
+            Tickets assigned to you appear here as soon as they&apos;re created. Pick something up from a board to get started.
+          </p>
+          <Button variant="ghost" size="sm" asChild className="mt-1">
+            <Link href="/boards" prefetch={false}>
+              Open boards
+              <IconArrowUpRight aria-hidden />
+            </Link>
+          </Button>
         </div>
       ) : (
-        <div className="overflow-x-auto px-4">
+        <div className="overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead className="hidden sm:table-cell">Board</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="hidden md:table-cell">Priority</TableHead>
-                <TableHead>Due</TableHead>
-                <TableHead className="w-10" />
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="pl-5">Title</TableHead>
+                <TableHead className="hidden @2xl/tasks:table-cell">Board</TableHead>
+                <TableHead className="hidden @2xl/tasks:table-cell">Status</TableHead>
+                <TableHead className="hidden @3xl/tasks:table-cell">Priority</TableHead>
+                <TableHead className="pr-5 text-right">Due</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tasks.map((task) => (
-                <TableRow
-                  key={task.id}
-                  className="group cursor-pointer"
-                  onClick={() => goToTicket(task)}
-                >
-                  <TableCell className="max-w-[280px] truncate font-medium">
-                    {task.done && (
-                      <IconCircleCheckFilled className="mr-1 inline size-4 text-emerald-500" />
-                    )}
-                    {task.title}
-                  </TableCell>
-                  <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
-                    {task.boardName}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="px-1.5 text-muted-foreground">
-                      <span
-                        className={`h-1.5 w-1.5 rounded-full ${DOT_BY_KEY[task.colorKey?.toLowerCase()] ?? "bg-muted-foreground"}`}
-                      />
-                      {task.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <Badge
-                      variant="outline"
-                      className={`px-1.5 capitalize ${PRIORITY_CLASS[task.priority] ?? "text-muted-foreground"}`}
-                    >
-                      {task.priority}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className={`whitespace-nowrap text-xs ${dueTone(task.dueDate)}`}>
-                    {task.dueDate ? formatDue(task.dueDate) : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <IconArrowRight className="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                  </TableCell>
-                </TableRow>
-              ))}
+              {tasks.map((task) => {
+                const state = dueState(task.dueDate, today)
+                return (
+                  <TableRow
+                    key={task.id}
+                    data-due={state}
+                    className="group/row relative transition-colors duration-(--dur-fast) ease-(--ease-out) hover:bg-surface-hover has-[a:focus-visible]:bg-surface-hover"
+                  >
+                    <TableCell className="max-w-[min(360px,62vw)] pl-5 font-medium">
+                      <Link
+                        href={`/boards?board=${task.boardId}&ticket=${task.id}`}
+                        prefetch={false}
+                        className="block truncate outline-none after:absolute after:inset-0 after:content-['']"
+                      >
+                        {task.title}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground @2xl/tasks:table-cell">{task.boardName}</TableCell>
+                    <TableCell className="hidden @2xl/tasks:table-cell">
+                      <span className="inline-flex items-center gap-1.5 text-xs">
+                        <span
+                          className={cn("size-1.5 rounded-full", STATUS_DOT[task.colorKey?.toLowerCase()] ?? "bg-muted-foreground/50")}
+                          aria-hidden
+                        />
+                        {task.status}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden @3xl/tasks:table-cell">
+                      <span className="inline-flex items-center gap-1.5 text-xs capitalize">
+                        <span className={cn("size-1.5 rounded-full", PRIORITY_DOT[task.priority] ?? PRIORITY_DOT.low)} aria-hidden />
+                        {task.priority}
+                      </span>
+                    </TableCell>
+                    <TableCell className={cn("pr-5 text-right text-xs whitespace-nowrap tabular-nums", DUE_CLASS[state])}>
+                      {dueLabel(task, state)}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </div>

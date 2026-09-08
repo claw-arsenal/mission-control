@@ -365,9 +365,10 @@ export const formatDue = (dueDate: string | null): string => {
   return `${MONTH_SHORT[month - 1]} ${day}`;
 };
 
+/** List tone marks use the status vocabulary so they follow the theme. */
 export const toneColor: Record<Column["tone"], string> = {
-  neutral: "bg-slate-400",
-  info: "bg-blue-500",
-  warning: "bg-amber-500",
-  success: "bg-emerald-500",
+  neutral: "bg-muted-foreground/60",
+  info: "bg-info",
+  warning: "bg-warning",
+  success: "bg-success",
 };

@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { useRouter } from "next/navigation"
+import Link from "next/link"
+import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/hooks/use-auth"
 import {
   IconDashboard,
@@ -18,11 +19,12 @@ import {
   IconChartBar,
 } from "@tabler/icons-react"
 
-import { NavMain } from "@/components/layout/nav-main"
+import { NavMain, type NavGroup, type NavItem } from "@/components/layout/nav-main"
 import { NavActivity } from "@/components/layout/nav-activity"
 import { NavUser } from "@/components/layout/nav-user"
 import { NotificationsBell } from "@/components/notifications/notifications-bell"
 import { useModules } from "@/components/modules/modules-provider"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Sidebar,
   SidebarContent,
@@ -35,22 +37,41 @@ import {
 import packageJson from "../../package.json"
 import { toast } from "sonner"
 
+type NavEntry = NavItem & { moduleId?: string }
+
 // `moduleId` ties an entry to a module in lib/modules/registry.ts.
-// When a module is disabled, its nav entries are hidden client-side.
+// When a module is disabled, its nav entry is hidden client-side.
 // Entries without a moduleId are always visible.
-const NAV_ENTRIES = [
-  { title: "Dashboard", url: "/dashboard", icon: IconDashboard },
-  { title: "Boards", url: "/boards", icon: IconListDetails, moduleId: "kanban" },
-  { title: "Documents", url: "/documents", icon: IconFileText, moduleId: "documents" },
-  { title: "Metrics", url: "/metrics", icon: IconChartBar, moduleId: "metrics" },
-  { title: "Mobile Applications", url: "/mobile-apps", icon: IconDeviceMobile, moduleId: "mobile-apps" },
-  { title: "Agenda", url: "/agenda", icon: IconCalendar, moduleId: "agenda" },
-  { title: "Processes", url: "/processes", icon: IconStack2, moduleId: "processes" },
-  { title: "Agents", url: "/agents", icon: IconRobot },
-  { title: "File Manager", url: "/file-manager", icon: IconFolder },
-  { title: "System", url: "/logs", icon: IconLogs },
-  { title: "Settings", url: "/settings", icon: IconSettings },
-] as const;
+const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
+  {
+    label: "Overview",
+    items: [{ title: "Dashboard", url: "/dashboard", icon: IconDashboard }],
+  },
+  {
+    label: "Work",
+    items: [
+      { title: "Boards", url: "/boards", icon: IconListDetails, moduleId: "kanban" },
+      { title: "Agenda", url: "/agenda", icon: IconCalendar, moduleId: "agenda" },
+      { title: "Processes", url: "/processes", icon: IconStack2, moduleId: "processes" },
+      { title: "Documents", url: "/documents", icon: IconFileText, moduleId: "documents" },
+    ],
+  },
+  {
+    label: "Insights",
+    items: [
+      { title: "Metrics", url: "/metrics", icon: IconChartBar, moduleId: "metrics" },
+      { title: "Mobile Applications", url: "/mobile-apps", icon: IconDeviceMobile, moduleId: "mobile-apps" },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { title: "Agents", url: "/agents", icon: IconRobot },
+      { title: "File Manager", url: "/file-manager", icon: IconFolder },
+      { title: "System", url: "/logs", icon: IconLogs },
+    ],
+  },
+]
 
 const APP_VERSION = packageJson.version || "0.1.0"
 
@@ -67,9 +88,14 @@ type AppSidebarProps = React.ComponentProps<typeof Sidebar> & {
 
 export function AppSidebar({ initialUser, showActivity = true, ...props }: AppSidebarProps) {
   const router = useRouter()
+  const pathname = usePathname()
   const { user: authUser } = useAuth()
   const { isEnabled } = useModules()
-  const visibleNav = NAV_ENTRIES.filter((e) => !("moduleId" in e) || isEnabled(e.moduleId as string))
+
+  const groups: NavGroup[] = NAV_GROUPS.map((group) => ({
+    label: group.label,
+    items: group.items.filter((e) => !e.moduleId || isEnabled(e.moduleId)),
+  }))
 
   const sessionUser: SidebarUser | null = authUser
     ? { name: authUser.name, email: authUser.email, avatar: "" }
@@ -77,17 +103,12 @@ export function AppSidebar({ initialUser, showActivity = true, ...props }: AppSi
 
   const [user, setUser] = React.useState<SidebarUser | null>(sessionUser)
   const [instanceName, setInstanceName] = React.useState("")
-  const [appVersion, setAppVersion] = React.useState("")
 
   // Keep displayed user in sync with live session
   React.useEffect(() => {
     setUser(sessionUser)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser])
-
-  React.useEffect(() => {
-    setAppVersion(APP_VERSION)
-  }, [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -138,34 +159,60 @@ export function AppSidebar({ initialUser, showActivity = true, ...props }: AppSi
     }
   }
 
+  const settingsActive = pathname === "/settings" || pathname.startsWith("/settings/")
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
-      <SidebarHeader>
+      <SidebarHeader className="px-2 pt-2.5 pb-1">
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex items-center gap-1.5 pr-1.5">
+            <div className="flex items-center gap-1 pr-0.5">
               <SidebarMenuButton
                 asChild
-                className="data-[slot=sidebar-menu-button]:p-1.5! flex-1"
+                size="lg"
+                className="h-11 flex-1 gap-2.5 rounded-lg px-2 hover:bg-sidebar-accent/70"
               >
-                <a href="#">
-                  <IconInnerShadowTop className="size-5!" />
-                  <span className="text-base font-semibold">{instanceName || "\u00A0"}</span>
-                </a>
+                <Link href="/dashboard" prefetch={false} aria-label="Go to dashboard">
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-elev-1">
+                    <IconInnerShadowTop className="size-4" aria-hidden />
+                  </span>
+                  <span className="grid min-w-0 flex-1 leading-tight">
+                    {instanceName ? (
+                      <span className="truncate text-sm font-semibold tracking-tight">{instanceName}</span>
+                    ) : (
+                      <Skeleton className="h-4 w-28 bg-sidebar-accent" />
+                    )}
+                    <span className="truncate text-2xs text-sidebar-foreground/55">OpenClaw · v{APP_VERSION}</span>
+                  </span>
+                </Link>
               </SidebarMenuButton>
               <NotificationsBell />
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-      <SidebarContent>
-        <NavMain items={visibleNav} />
+
+      <SidebarContent className="gap-0">
+        <NavMain groups={groups} />
         {showActivity ? <NavActivity /> : null}
       </SidebarContent>
-      <SidebarFooter>
-        <span className="px-2 pb-2 text-xs text-muted-foreground">
-          Version v{appVersion || "\u00A0"}
-        </span>
+
+      <SidebarFooter className="gap-1 border-t border-sidebar-border/70 px-2 pt-2">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              isActive={settingsActive}
+              tooltip="Settings"
+              className="h-8 rounded-md text-sidebar-foreground/85 [&>svg]:text-sidebar-foreground/60 data-[active=true]:[&>svg]:text-primary"
+            >
+              <Link href="/settings" prefetch={false} aria-current={settingsActive ? "page" : undefined}>
+                <IconSettings />
+                <span>Settings</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         {user ? <NavUser user={user} onLogout={handleLogout} /> : null}
       </SidebarFooter>
     </Sidebar>

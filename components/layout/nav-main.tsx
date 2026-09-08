@@ -11,41 +11,55 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 
-type NavItem = {
+export type NavItem = {
   title: string
   url: string
   icon: React.ElementType
 }
 
-export function NavMain({ items }: { items: NavItem[] }) {
+export type NavGroup = {
+  label: string
+  items: NavItem[]
+}
+
+function isActivePath(pathname: string, url: string) {
+  if (url === "/") return pathname === "/"
+  return pathname === url || pathname.startsWith(`${url}/`)
+}
+
+/** Primary navigation, grouped by what the operator is doing. Empty groups are skipped. */
+export function NavMain({ groups }: { groups: NavGroup[] }) {
   const pathname = usePathname()
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>Platform</SidebarGroupLabel>
-      <SidebarMenu>
-        {items.map((item) => {
-          const isRoot = item.url === "/"
-          const isActive = isRoot
-            ? pathname === "/"
-            : pathname === item.url || pathname.startsWith(`${item.url}/`)
-
-          return (
-            <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton
-                asChild
-                isActive={isActive}
-                tooltip={item.title}
-              >
-                <Link href={item.url} prefetch={false}>
-                  <item.icon />
-                  <span>{item.title}</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          )
-        })}
-      </SidebarMenu>
-    </SidebarGroup>
+    <>
+      {groups
+        .filter((group) => group.items.length > 0)
+        .map((group) => (
+          <SidebarGroup key={group.label} className="py-1">
+            <SidebarGroupLabel className="eyebrow h-7 text-sidebar-foreground/55">{group.label}</SidebarGroupLabel>
+            <SidebarMenu>
+              {group.items.map((item) => {
+                const active = isActivePath(pathname, item.url)
+                return (
+                  <SidebarMenuItem key={item.url}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={active}
+                      tooltip={item.title}
+                      className="h-8 rounded-md text-sidebar-foreground/85 transition-[background-color,color] duration-(--dur-fast) ease-(--ease-out) data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground data-[active=true]:shadow-elev-1 [&>svg]:text-sidebar-foreground/60 data-[active=true]:[&>svg]:text-primary"
+                    >
+                      <Link href={item.url} prefetch={false} aria-current={active ? "page" : undefined}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )
+              })}
+            </SidebarMenu>
+          </SidebarGroup>
+        ))}
+    </>
   )
 }

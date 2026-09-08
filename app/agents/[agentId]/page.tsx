@@ -107,19 +107,19 @@ export default async function AgentPage({ params }: { params: Promise<{ agentId:
 
   // Agent status colors
   const statusGradient = agent.status === "running"
-    ? "from-emerald-500/20 via-emerald-500/5 to-transparent"
+    ? "from-success/20 via-success/5 to-transparent"
     : agent.status === "degraded"
       ? "from-red-500/20 via-red-500/5 to-transparent"
-      : "from-amber-500/15 via-amber-500/3 to-transparent";
+      : "from-warning/15 via-warning/5 to-transparent";
 
   const statusRingColor = agent.status === "running"
-    ? "ring-emerald-500/20"
+    ? "ring-success/20"
     : agent.status === "degraded"
       ? "ring-red-500/20"
-      : "ring-amber-500/20";
+      : "ring-warning/20";
 
   return (
-    <SidebarProvider style={{ "--sidebar-width": "calc(var(--spacing) * 72)", "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}>
+    <SidebarProvider style={{ "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties}>
       <AppSidebar variant="inset" initialUser={sidebarUser} />
       <SidebarInset>
         <PageHeader page={`Agent: ${formatAgentName(agent.name)}`} />
@@ -131,20 +131,20 @@ export default async function AgentPage({ params }: { params: Promise<{ agentId:
               <div className="flex items-center gap-4">
                 {/* Avatar */}
                 <div className="relative">
-                  <div className="size-16 rounded-2xl bg-gradient-to-br from-primary/25 to-primary/5 border-2 border-primary/20 flex items-center justify-center text-3xl shadow-sm">
-                    🤖
+                  <div className="flex size-16 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-elev-1">
+                    <CpuIcon className="size-7" aria-hidden />
                   </div>
                   {agent.status === "running" && (
                     <span className="absolute -top-1 -right-1 flex size-4">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full size-4 bg-emerald-500 border-2 border-card" />
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
+                      <span className="relative inline-flex rounded-full size-4 bg-success border-2 border-card" />
                     </span>
                   )}
                 </div>
                 <div className="space-y-2">
                   <CardTitle className="text-2xl tracking-tight">{formatAgentName(agent.name)}</CardTitle>
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <Badge variant="secondary" className="font-mono text-[10px]">{agent.id}</Badge>
+                    <Badge variant="secondary" className="font-mono text-2xs">{agent.id}</Badge>
                     <span className="text-border">•</span>
                     <span>{agent.runtime.model ?? "unknown model"}</span>
                   </div>
@@ -160,8 +160,8 @@ export default async function AgentPage({ params }: { params: Promise<{ agentId:
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <CardDescription>Status</CardDescription>
-                      <div className="size-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-                        <ActivityIcon className="size-4 text-emerald-600 dark:text-emerald-400" />
+                      <div className="size-8 rounded-lg bg-success-soft flex items-center justify-center">
+                        <ActivityIcon className="size-4 text-success-fg" />
                       </div>
                     </div>
                     <CardTitle className="text-2xl">
@@ -169,10 +169,10 @@ export default async function AgentPage({ params }: { params: Promise<{ agentId:
                         variant="outline"
                         className={
                           agent.status === "running"
-                            ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                            ? "border-success/40 bg-success-soft text-success-fg"
                             : agent.status === "degraded"
                               ? "border-red-500/40 bg-red-500/15 text-red-700 dark:text-red-300"
-                              : "border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                              : "border-warning/40 bg-warning-soft text-warning-fg"
                         }
                       >
                         {agent.status}
@@ -185,8 +185,8 @@ export default async function AgentPage({ params }: { params: Promise<{ agentId:
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <CardDescription>Model</CardDescription>
-                      <div className="size-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                        <CpuIcon className="size-4 text-blue-600 dark:text-blue-400" />
+                      <div className="size-8 rounded-lg bg-info-soft flex items-center justify-center">
+                        <CpuIcon className="size-4 text-info-fg" />
                       </div>
                     </div>
                     <CardTitle className="text-sm font-medium text-foreground/80 truncate">{agent.runtime.model ?? "unknown"}</CardTitle>
@@ -213,11 +213,11 @@ export default async function AgentPage({ params }: { params: Promise<{ agentId:
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <CardDescription>Queue Depth</CardDescription>
-                      <div className="size-8 rounded-lg bg-fuchsia-500/10 flex items-center justify-center">
-                        <LayersIcon className="size-4 text-fuchsia-600 dark:text-fuchsia-400" />
+                      <div className="size-8 rounded-lg bg-chart-5/10 flex items-center justify-center">
+                        <LayersIcon className="size-4 text-chart-5" />
                       </div>
                     </div>
-                    <CardTitle className="text-2xl text-fuchsia-600 dark:text-fuchsia-400">{agent.runtime.queueDepth ?? 0}</CardTitle>
+                    <CardTitle className="text-2xl text-chart-5">{agent.runtime.queueDepth ?? 0}</CardTitle>
                   </CardHeader>
                 </Card>
               </div>

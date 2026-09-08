@@ -95,13 +95,13 @@ function renderMarkdown(text: string): React.ReactNode[] {
 
 function ResultBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; className: string }> = {
-    running:   { label: "● Running",  className: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400" },
-    succeeded: { label: "✓ Succeeded", className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-    failed:    { label: "✗ Failed",    className: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400" },
+    running:   { label: "● Running",  className: "border-warning/40 bg-warning-soft text-warning-fg" },
+    succeeded: { label: "✓ Succeeded", className: "border-success/40 bg-success-soft text-success-fg" },
+    failed:    { label: "✗ Failed",    className: "border-red-500/40 bg-danger-soft text-danger-fg" },
     pending:   { label: "Pending",     className: "border-muted-foreground/30 text-muted-foreground" },
   };
   const cfg = map[status] ?? map.pending;
-  return <Badge variant="outline" className={`text-[10px] uppercase tracking-wider ${cfg.className}`}>{cfg.label}</Badge>;
+  return <Badge variant="outline" className={`text-2xs uppercase tracking-wider ${cfg.className}`}>{cfg.label}</Badge>;
 }
 
 function isImageFile(name: string): boolean {
@@ -280,7 +280,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                   {/* Step header */}
                   <CardHeader>
                     <CardTitle className="text-base font-semibold flex items-center gap-2">
-                      <Badge variant="outline" className="size-5 p-0 flex items-center justify-center text-[9px] font-bold shrink-0">
+                      <Badge variant="outline" className="size-5 p-0 flex items-center justify-center text-2xs font-bold shrink-0">
                         {result.stepIndex + 1}
                       </Badge>
                       {result.title || `Step ${result.stepIndex + 1}`}
@@ -295,7 +295,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                     <div className="flex flex-col gap-1.5 rounded-lg bg-muted/30 p-3">
                       {result.agentId && (
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Agent</span>
+                          <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Agent</span>
                           <span className="text-xs font-mono text-foreground/80 flex items-center gap-1">
                             <IconRobot className="size-3 text-primary" />
                             {result.agentId}
@@ -304,8 +304,8 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                       )}
                       {result.skillKey && (
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Skill</span>
-                          <Badge variant="secondary" className="text-[10px]">
+                          <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Skill</span>
+                          <Badge variant="secondary" className="text-2xs">
                             <IconCode className="size-2.5 mr-0.5" />
                             {result.skillKey}
                           </Badge>
@@ -313,7 +313,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                       )}
                       {result.modelOverride && (
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Model</span>
+                          <span className="text-2xs font-bold uppercase tracking-wider text-muted-foreground w-14 shrink-0">Model</span>
                           <span className="text-xs font-mono text-foreground/80 flex items-center gap-1">
                             <IconCpu className="size-3 text-primary" />
                             {result.modelOverride}
@@ -325,7 +325,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                     {/* Instruction */}
                     {result.instruction && (
                       <div className="rounded-lg border border-dashed border-muted-foreground/20 bg-muted/20 p-3">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Instruction</p>
+                        <p className="text-2xs font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Instruction</p>
                         <p className="text-xs text-foreground/80 whitespace-pre-wrap leading-relaxed">
                           {result.instruction.length > 300 ? result.instruction.slice(0, 300) + "…" : result.instruction}
                         </p>
@@ -335,7 +335,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                     {/* Running state */}
                     {result.status === "running" && (
                       <div className="flex items-center gap-2 py-4 justify-center">
-                        <IconLoader2 className="size-5 animate-spin text-amber-500" />
+                        <IconLoader2 className="size-5 animate-spin text-warning" />
                         <span className="text-sm text-muted-foreground animate-pulse">Processing step {result.stepIndex + 1}...</span>
                       </div>
                     )}
@@ -343,7 +343,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                     {/* Output — rendered as markdown */}
                     {result.output && (
                       <>
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Output</p>
+                        <p className="text-2xs font-bold uppercase tracking-wider text-muted-foreground">Output</p>
                         <div className="rounded-lg border bg-muted/40 p-4 flex flex-col gap-0.5 max-h-[300px] overflow-auto">
                           {renderMarkdown(result.output.replace(/\n*>\s*`Agent:.*`$/, "").trim())}
                         </div>
@@ -352,7 +352,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
 
                     {/* Error */}
                     {result.error && (
-                      <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-600">
+                      <div className="bg-danger-soft border border-red-500/20 rounded-lg p-3 text-sm text-red-600">
                         {result.error}
                       </div>
                     )}
@@ -426,7 +426,7 @@ export function ProcessSimulateModal({ open, processId, processName, steps, auto
                 </Button>
               )}
               {cleaned && (
-                <Badge variant="outline" className="text-emerald-600 border-emerald-500/30 bg-emerald-500/10">
+                <Badge variant="outline" className="text-success-fg border-success/30 bg-success-soft">
                   <IconCheck className="size-3 mr-1" />
                   Cleaned
                 </Badge>

@@ -18,6 +18,7 @@ import {
 import {
   ChevronDownIcon,
   ColumnsIcon,
+  LayoutListIcon,
   CopyIcon,
   FilterIcon,
   ListChecksIcon,
@@ -31,6 +32,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import type { Assignee, Label, SortMode, ViewMode } from "@/types/tasks";
+import type { CardDensity } from "@/hooks/use-tasks";
 
 type DueFilter = "all" | "overdue" | "today" | "thisWeek" | "noDue";
 
@@ -41,6 +43,8 @@ type ToolbarTasks = {
   setSort: (v: SortMode) => void;
   view: ViewMode;
   setView: (v: ViewMode) => void;
+  cardDensity: CardDensity;
+  setCardDensity: (v: CardDensity) => void;
   openCreateModal: (statusId: string) => void;
   openCreateListModal: () => void;
   assigneeFilter: Set<string>;
@@ -128,7 +132,7 @@ export function WorkspaceToolbar({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-60">
-          <DropdownMenuLabel className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          <DropdownMenuLabel className="eyebrow">
             On this board
           </DropdownMenuLabel>
           <DropdownMenuItem onClick={tasks.openCreateListModal}>
@@ -146,7 +150,7 @@ export function WorkspaceToolbar({
 
           <DropdownMenuSeparator />
 
-          <DropdownMenuLabel className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          <DropdownMenuLabel className="eyebrow">
             Board settings
           </DropdownMenuLabel>
           <DropdownMenuItem onClick={onEditBoard}>
@@ -176,7 +180,7 @@ export function WorkspaceToolbar({
             <SlidersHorizontalIcon className="size-3.5" />
             View
             {activeFilterCount > 0 && (
-              <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-foreground/10 px-1 text-[10px] font-medium tabular-nums">
+              <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-2 px-1 text-2xs font-medium tabular-nums">
                 {activeFilterCount}
               </span>
             )}
@@ -186,13 +190,13 @@ export function WorkspaceToolbar({
         <DropdownMenuContent align="end" className="w-64">
           {/* Filters section */}
           <div className="flex items-center justify-between px-2 pt-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+            <span className="eyebrow">
               Filters
             </span>
             {activeFilterCount > 0 && (
               <button
                 onClick={clearAllFilters}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
+                className="text-2xs text-muted-foreground hover:text-foreground"
               >
                 Clear all
               </button>
@@ -205,7 +209,7 @@ export function WorkspaceToolbar({
               <UsersIcon className="size-3.5 text-muted-foreground" />
               <span className="flex-1">Assignee</span>
               {tasks.assigneeFilter.size > 0 && (
-                <span className="rounded-full bg-foreground/10 px-1.5 text-[9px] font-medium tabular-nums">
+                <span className="rounded-full bg-surface-2 px-1.5 text-2xs font-medium tabular-nums">
                   {tasks.assigneeFilter.size}
                 </span>
               )}
@@ -234,7 +238,7 @@ export function WorkspaceToolbar({
                     >
                       <span className="flex items-center gap-2">
                         <span
-                          className="flex size-4 items-center justify-center rounded-full text-[9px] font-semibold text-white"
+                          className="flex size-4 items-center justify-center rounded-full text-2xs font-semibold text-white"
                           style={{ backgroundColor: a.color }}
                         >
                           {a.initials}
@@ -265,7 +269,7 @@ export function WorkspaceToolbar({
               <TagIcon className="size-3.5 text-muted-foreground" />
               <span className="flex-1">Label</span>
               {tasks.labelFilter.size > 0 && (
-                <span className="rounded-full bg-foreground/10 px-1.5 text-[9px] font-medium tabular-nums">
+                <span className="rounded-full bg-surface-2 px-1.5 text-2xs font-medium tabular-nums">
                   {tasks.labelFilter.size}
                 </span>
               )}
@@ -293,7 +297,7 @@ export function WorkspaceToolbar({
                       onSelect={(e) => e.preventDefault()}
                     >
                       <span
-                        className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium text-white"
+                        className="inline-flex items-center rounded-full px-1.5 py-0.5 text-2xs font-medium text-white"
                         style={{ backgroundColor: l.color }}
                       >
                         {l.name}
@@ -322,7 +326,7 @@ export function WorkspaceToolbar({
               <FilterIcon className="size-3.5 text-muted-foreground" />
               <span className="flex-1">Due date</span>
               {tasks.dueFilter !== "all" && (
-                <span className="rounded-full bg-foreground/10 px-1.5 text-[9px] font-medium">
+                <span className="rounded-full bg-surface-2 px-1.5 text-2xs font-medium">
                   {DUE_LABELS[tasks.dueFilter]}
                 </span>
               )}
@@ -346,7 +350,7 @@ export function WorkspaceToolbar({
           <DropdownMenuSeparator />
 
           {/* Sort section */}
-          <DropdownMenuLabel className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          <DropdownMenuLabel className="eyebrow flex items-center gap-2">
             <ListChecksIcon className="size-3" />
             Sort by
           </DropdownMenuLabel>
@@ -364,7 +368,7 @@ export function WorkspaceToolbar({
           <DropdownMenuSeparator />
 
           {/* View mode */}
-          <DropdownMenuLabel className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          <DropdownMenuLabel className="eyebrow flex items-center gap-2">
             <ListIcon className="size-3" />
             View as
           </DropdownMenuLabel>
@@ -378,6 +382,23 @@ export function WorkspaceToolbar({
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
+
+          {tasks.view === "kanban" && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="eyebrow flex items-center gap-2">
+                <LayoutListIcon className="size-3" />
+                Card density
+              </DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={tasks.cardDensity}
+                onValueChange={(v) => tasks.setCardDensity(v as CardDensity)}
+              >
+                <DropdownMenuRadioItem value="comfortable">Comfortable</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="compact">Compact</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </>

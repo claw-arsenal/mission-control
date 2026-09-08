@@ -1327,7 +1327,7 @@ export function FileManagerClient(): React.JSX.Element {
       return <Folder className={cn(size, "shrink-0 text-primary/70")} />;
     }
     if (isImageFile(item.name)) {
-      return <FileImage className={cn(size, "shrink-0 text-emerald-500/70")} />;
+      return <FileImage className={cn(size, "shrink-0 text-success-fg")} />;
     }
     if (isTextFile(item.name)) {
       return <FileText className={cn(size, "shrink-0 text-muted-foreground")} />;
@@ -1679,8 +1679,8 @@ export function FileManagerClient(): React.JSX.Element {
                     </TableCell>
                     <TableCell className="hidden lg:table-cell text-xs">
                       <span className={cn(
-                        "inline-flex items-center gap-1 font-mono text-[11px]",
-                        item.ownerMismatch ? "text-amber-500" : "text-muted-foreground",
+                        "inline-flex items-center gap-1 font-mono text-2xs",
+                        item.ownerMismatch ? "text-warning" : "text-muted-foreground",
                       )}>
                         {item.ownerMismatch && <AlertCircle className="h-3 w-3 shrink-0" />}
                         {item.owner}:{item.group}
@@ -1804,13 +1804,13 @@ export function FileManagerClient(): React.JSX.Element {
                     </div>
                     {/* Name + size */}
                     <p className="text-xs font-medium truncate text-center">{item.name}</p>
-                    <p className="text-[10px] text-muted-foreground text-center mt-0.5">
+                    <p className="text-2xs text-muted-foreground text-center mt-0.5">
                       {item.type === "file" ? formatSize(item.size) : "Folder"}
                     </p>
                     {globalSearch && globalResults !== null && (
                       <button
                         type="button"
-                        className="text-[10px] text-muted-foreground/70 hover:text-primary hover:underline truncate text-center w-full mt-0.5 block"
+                        className="text-2xs text-muted-foreground/70 hover:text-primary hover:underline truncate text-center w-full mt-0.5 block"
                         title={`Go to ${parentFolder(item.id)}`}
                         onClick={(e) => { e.stopPropagation(); navigateTo(parentFolder(item.id)); }}
                       >
@@ -1861,8 +1861,8 @@ export function FileManagerClient(): React.JSX.Element {
                     <Folder className="h-4 w-4 text-primary" />
                   </div>
                 ) : isImageFile(previewItem?.name ?? "") ? (
-                  <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
-                    <ImageIcon className="h-4 w-4 text-emerald-500" />
+                  <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-success/10">
+                    <ImageIcon className="h-4 w-4 text-success-fg" />
                   </div>
                 ) : isTextFile(previewItem?.name ?? "") ? (
                   <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
@@ -1980,7 +1980,7 @@ export function FileManagerClient(): React.JSX.Element {
                       <Folder className="h-3 w-3" />
                       <span>Location</span>
                     </div>
-                    <span className="text-foreground truncate font-mono text-[11px]">~/.openclaw{previewItem.id}</span>
+                    <span className="text-foreground truncate font-mono text-2xs">~/.openclaw{previewItem.id}</span>
 
                     <div className="flex items-center gap-1.5 text-muted-foreground">
                       <Calendar className="h-3 w-3" />
@@ -1998,20 +1998,20 @@ export function FileManagerClient(): React.JSX.Element {
                       <Shield className="h-3 w-3" />
                       <span>Permissions</span>
                     </div>
-                    <span className="text-foreground font-mono text-[11px]">{previewItem.permissions}</span>
+                    <span className="text-foreground font-mono text-2xs">{previewItem.permissions}</span>
 
                     <div className="flex items-center gap-1.5 text-muted-foreground">
                       <Shield className="h-3 w-3" />
                       <span>Owner</span>
                     </div>
                     <span className={cn(
-                      "font-mono text-[11px]",
-                      previewItem.ownerMismatch ? "text-amber-500 flex items-center gap-1" : "text-foreground",
+                      "font-mono text-2xs",
+                      previewItem.ownerMismatch ? "text-warning flex items-center gap-1" : "text-foreground",
                     )}>
                       {previewItem.ownerMismatch && <AlertCircle className="h-3 w-3 shrink-0 inline" />}
                       {previewItem.owner}:{previewItem.group}
                       {previewItem.ownerMismatch && (
-                        <span className="text-[10px] ml-1 font-sans">(mismatch)</span>
+                        <span className="text-2xs ml-1 font-sans">(mismatch)</span>
                       )}
                     </span>
                   </div>
@@ -2046,7 +2046,7 @@ export function FileManagerClient(): React.JSX.Element {
                     Cancel
                   </Button>
                   {hasUnsavedChanges && (
-                    <span className="text-[10px] text-amber-500 ml-2">Unsaved changes</span>
+                    <span className="text-2xs text-warning ml-2">Unsaved changes</span>
                   )}
                 </div>
               ) : (
@@ -2177,7 +2177,7 @@ export function FileManagerClient(): React.JSX.Element {
                             <ImageIcon className="h-3 w-3" />
                             <span>Dimensions</span>
                           </div>
-                          <span className="text-foreground font-mono text-[11px]">
+                          <span className="text-foreground font-mono text-2xs">
                             {previewImageSize.width} × {previewImageSize.height}
                           </span>
                         </>
@@ -2187,7 +2187,7 @@ export function FileManagerClient(): React.JSX.Element {
                         <Folder className="h-3 w-3" />
                         <span>Location</span>
                       </div>
-                      <span className="text-foreground truncate font-mono text-[11px]">~/.openclaw{previewItem.id}</span>
+                      <span className="text-foreground truncate font-mono text-2xs">~/.openclaw{previewItem.id}</span>
 
                       <div className="flex items-center gap-1.5 text-muted-foreground">
                         <Calendar className="h-3 w-3" />
@@ -2211,20 +2211,20 @@ export function FileManagerClient(): React.JSX.Element {
                         <Shield className="h-3 w-3" />
                         <span>Permissions</span>
                       </div>
-                      <span className="text-foreground font-mono text-[11px]">{previewItem.permissions}</span>
+                      <span className="text-foreground font-mono text-2xs">{previewItem.permissions}</span>
 
                       <div className="flex items-center gap-1.5 text-muted-foreground">
                         <Shield className="h-3 w-3" />
                         <span>Owner</span>
                       </div>
                       <span className={cn(
-                        "font-mono text-[11px]",
-                        previewItem.ownerMismatch ? "text-amber-500 flex items-center gap-1" : "text-foreground",
+                        "font-mono text-2xs",
+                        previewItem.ownerMismatch ? "text-warning flex items-center gap-1" : "text-foreground",
                       )}>
                         {previewItem.ownerMismatch && <AlertCircle className="h-3 w-3 shrink-0 inline" />}
                         {previewItem.owner}:{previewItem.group}
                         {previewItem.ownerMismatch && (
-                          <span className="text-[10px] ml-1 font-sans">(mismatch)</span>
+                          <span className="text-2xs ml-1 font-sans">(mismatch)</span>
                         )}
                       </span>
                     </div>

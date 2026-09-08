@@ -350,7 +350,7 @@ function StepIndicator({ currentStep, onStepClick, canReach }: { currentStep: nu
             ].join(" ")}
           >
             <div className={[
-              "flex items-center justify-center size-6 rounded-full text-[10px] font-bold shrink-0",
+              "flex items-center justify-center size-6 rounded-full text-2xs font-bold shrink-0",
               isActive
                 ? "bg-primary-foreground/20 text-primary-foreground"
                 : isDone
@@ -360,7 +360,7 @@ function StepIndicator({ currentStep, onStepClick, canReach }: { currentStep: nu
               {isDone ? <IconCheck className="size-3" /> : i + 1}
             </div>
             <div className="flex flex-col items-start min-w-0">
-              <span className="text-[11px] font-semibold leading-tight truncate">{step.label}</span>
+              <span className="text-2xs font-semibold leading-tight truncate">{step.label}</span>
             </div>
           </button>
         );
@@ -616,7 +616,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           </div>
           <div className="text-center">
             <p className="text-sm font-bold">One-time</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Runs once on a specific date</p>
+            <p className="text-2xs text-muted-foreground mt-0.5">Runs once on a specific date</p>
           </div>
         </button>
 
@@ -638,7 +638,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           </div>
           <div className="text-center">
             <p className="text-sm font-bold">Repeatable</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Runs daily or weekly on a schedule</p>
+            <p className="text-2xs text-muted-foreground mt-0.5">Runs daily or weekly on a schedule</p>
           </div>
         </button>
       </div>
@@ -778,7 +778,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                     {form.modelOverride
                       ? <span className="flex gap-1.5 items-center truncate">
                           <span className="font-medium truncate">{models.find((m) => m.id === form.modelOverride)?.alias ?? form.modelOverride}</span>
-                          <span className="text-muted-foreground text-[10px] shrink-0">({getProviderLabel(form.modelOverride)})</span>
+                          <span className="text-muted-foreground text-2xs shrink-0">({getProviderLabel(form.modelOverride)})</span>
                         </span>
                       : "Agent default"}
                   </SelectValue>
@@ -833,7 +833,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
           </SelectContent>
         </Select>
         {form.sessionTarget === "main" && (
-          <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 mt-0.5">
+          <p className="text-xs text-warning-fg flex items-start gap-1.5 mt-0.5">
             <span className="mt-0.5">&#9888;</span>
             <span>Main session shares context with your live chat. Avoid long-running or noisy tasks here.</span>
           </p>
@@ -1243,7 +1243,7 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                     <span className="size-2 rounded-full bg-red-400/70" />
                     <span className="size-2 rounded-full bg-yellow-400/70" />
                     <span className="size-2 rounded-full bg-green-400/70" />
-                    <span className="ml-2 text-[10px] font-mono text-muted-foreground/60 tracking-wide">prompt-renderer.mjs — live preview</span>
+                    <span className="ml-2 text-2xs font-mono text-muted-foreground/60 tracking-wide">prompt-renderer.mjs — live preview</span>
                   </div>
                   {/* Prompt content */}
                   <div className="max-h-[340px] overflow-y-auto">
@@ -1256,19 +1256,19 @@ export function AgendaEventModal({ open, agents = EMPTY_AGENTS, processes = EMPT
                         return (
                           <div key={i} className={isEmpty ? "h-3" : "leading-relaxed"}>
                             {isSectionHeader ? (
-                              <span className="text-primary font-bold text-[11px] uppercase tracking-widest opacity-80">{line}</span>
+                              <span className="text-primary font-bold text-2xs uppercase tracking-widest opacity-80">{line}</span>
                             ) : isRule ? (
-                              <span className="text-muted-foreground/70 text-[11px]">
+                              <span className="text-muted-foreground/70 text-2xs">
                                 <span className="text-primary/50 mr-1">–</span>
                                 {line.slice(2)}
                               </span>
                             ) : isNumbered ? (
-                              <span className="text-foreground/80 text-[11px]">
+                              <span className="text-foreground/80 text-2xs">
                                 <span className="text-primary/60 mr-1">{line.match(/^(\d+\.)/)?.[1]}</span>
                                 {line.replace(/^\d+\.\s*/, "")}
                               </span>
                             ) : (
-                              <span className="text-foreground/85 text-[11px]">{line}</span>
+                              <span className="text-foreground/85 text-2xs">{line}</span>
                             )}
                           </div>
                         );

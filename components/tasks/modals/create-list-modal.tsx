@@ -1,5 +1,6 @@
 "use client";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AlertTriangleIcon } from "lucide-react";
 
 type Props = {
   open: boolean;
@@ -41,7 +43,7 @@ export function CreateListModal({
 
         <div className="flex flex-col gap-2 py-2">
           <Label htmlFor="cl-list-name">
-            List name <span className="text-destructive">*</span>
+            List name <span className="text-danger-fg">*</span>
           </Label>
           <Input
             id="cl-list-name"
@@ -50,7 +52,13 @@ export function CreateListModal({
             onChange={(e) => onTitleChange(e.target.value)}
             autoFocus
           />
-          {error && <p className="text-xs text-destructive">{error}</p>}
+          {error && (
+            <Alert variant="destructive">
+              <AlertTriangleIcon />
+              <AlertTitle>That did not work</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
         </div>
 
         <DialogFooter>

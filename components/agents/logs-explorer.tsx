@@ -2,7 +2,18 @@
 
 import { useMemo, useState } from "react";
 import { formatDistance } from "date-fns";
-import { SearchIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  ChevronLeftIcon as IconChevronLeftSmall,
+  ChevronRightIcon as IconChevronRightSmall,
+  FilterIcon,
+  InfoIcon,
+  ScrollTextIcon,
+  SearchIcon,
+  XCircleIcon,
+  type LucideIcon,
+} from "lucide-react";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -50,18 +61,20 @@ type NormalizedLog = {
   eventTitle: string;
 };
 
+// Badge tones live in agent-ui so a level or channel looks the same wherever it
+// is drawn; this screen used to keep its own near-copy that drifted.
 const levelClasses: Record<string, string> = {
-  info: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  debug: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
-  warning: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  error: "border-destructive/30 bg-destructive/10 text-destructive",
+  info: "border-info/30 bg-info-soft text-info-fg",
+  debug: "border-line-strong bg-surface-2 text-muted-foreground",
+  warning: "border-warning/30 bg-warning-soft text-warning-fg",
+  error: "border-danger/30 bg-danger-soft text-danger-fg",
 };
 
 const channelClasses: Record<string, string> = {
-  telegram: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  gateway: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300",
-  internal: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
-  qdrant: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
+  telegram: "border-chart-2/30 bg-chart-2/10 text-chart-2",
+  gateway: "border-chart-3/30 bg-chart-3/10 text-chart-3",
+  internal: "border-line-strong bg-surface-2 text-muted-foreground",
+  qdrant: "border-chart-5/30 bg-chart-5/10 text-chart-5",
 };
 
 const channelLabel: Record<string, string> = {
@@ -508,11 +521,11 @@ function renderLogMarkdown(text: string): React.ReactNode[] {
   return nodes;
 }
 
-const LEVEL_ICONS: Record<string, { icon: string; color: string }> = {
-  info: { icon: "ℹ️", color: "text-sky-600 dark:text-sky-400" },
-  debug: { icon: "🔍", color: "text-zinc-600 dark:text-zinc-400" },
-  warning: { icon: "⚠️", color: "text-amber-600 dark:text-amber-400" },
-  error: { icon: "❌", color: "text-red-600 dark:text-red-400" },
+const LEVEL_ICONS: Record<string, { Icon: LucideIcon; color: string }> = {
+  info: { Icon: InfoIcon, color: "text-info-fg" },
+  debug: { Icon: SearchIcon, color: "text-muted-foreground" },
+  warning: { Icon: AlertTriangleIcon, color: "text-warning-fg" },
+  error: { Icon: XCircleIcon, color: "text-danger-fg" },
 };
 
 const DIRECTION_LABELS: Record<string, string> = {
@@ -541,18 +554,18 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
           <div className="flex items-center gap-3">
             <div className={cn(
               "flex items-center justify-center size-10 rounded-xl shrink-0",
-              log.level === "error" ? "bg-red-500/15" :
-              log.level === "warning" ? "bg-amber-500/15" :
-              isChat ? "bg-blue-500/15" :
-              isTool ? "bg-emerald-500/15" :
-              isMemory ? "bg-fuchsia-500/15" :
+              log.level === "error" ? "bg-danger-soft" :
+              log.level === "warning" ? "bg-warning-soft" :
+              isChat ? "bg-info-soft" :
+              isTool ? "bg-success-soft" :
+              isMemory ? "bg-chart-5/15" :
               "bg-primary/10"
             )}>
-              <span className="text-lg">{levelCfg.icon}</span>
+              <levelCfg.Icon className={cn("size-5", levelCfg.color)} aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
               <DialogTitle className="text-base">{eventLabel(log.eventType || log.type)}</DialogTitle>
-              <DialogDescription className="text-[11px]">
+              <DialogDescription className="text-2xs">
                 {log.eventType || log.type} • {fmtTime(log.occurredAt, initialNowIso)}
               </DialogDescription>
             </div>
@@ -560,25 +573,25 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
         </DialogHeader>
 
         {/* Two-column layout like ticket modal */}
-        <div className="flex overflow-hidden" style={{ maxHeight: "calc(92vh - 140px)" }}>
+        <div className="flex max-h-[min(70svh,640px)] overflow-hidden">
           {/* Main content */}
           <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4 min-w-0">
             {/* Metadata grid */}
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1 rounded-lg border bg-muted/10 p-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Level</span>
+                <span className="eyebrow">Level</span>
                 <Badge variant="outline" className={cn("w-fit capitalize", levelClasses[log.level] ?? levelClasses.info)}>{log.level}</Badge>
               </div>
               <div className="flex flex-col gap-1 rounded-lg border bg-muted/10 p-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Channel</span>
+                <span className="eyebrow">Channel</span>
                 <Badge variant="outline" className={cn("w-fit capitalize", channelClasses[log.channelType] ?? channelClasses.internal)}>{channelLabel[log.channelType] ?? log.channelType ?? "internal"}</Badge>
               </div>
               <div className="flex flex-col gap-1 rounded-lg border bg-muted/10 p-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Direction</span>
+                <span className="eyebrow">Direction</span>
                 <span className="text-sm font-medium">{DIRECTION_LABELS[log.direction] ?? log.direction ?? "Internal"}</span>
               </div>
               <div className="flex flex-col gap-1 rounded-lg border bg-muted/10 p-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Agent</span>
+                <span className="eyebrow">Agent</span>
                 <span className="text-sm font-medium truncate">{log.agentName || "—"}</span>
               </div>
             </div>
@@ -586,24 +599,24 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
             {/* Session / Run info */}
             {(log.sessionKey || log.runId || log.sourceMessageId) && (
               <div className="flex flex-col gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Identifiers</span>
+                <span className="eyebrow">Identifiers</span>
                 <div className="rounded-lg border bg-muted/10 p-3 space-y-1.5">
                   {log.sessionKey && (
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground">Session</span>
-                      <code className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded max-w-[300px] truncate">{log.sessionKey}</code>
+                      <code className="text-2xs font-mono bg-muted px-1.5 py-0.5 rounded max-w-[300px] truncate">{log.sessionKey}</code>
                     </div>
                   )}
                   {log.runId && (
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground">Run ID</span>
-                      <code className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded max-w-[300px] truncate">{log.runId}</code>
+                      <code className="text-2xs font-mono bg-muted px-1.5 py-0.5 rounded max-w-[300px] truncate">{log.runId}</code>
                     </div>
                   )}
                   {log.sourceMessageId && (
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground">Message ID</span>
-                      <code className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded max-w-[300px] truncate">{log.sourceMessageId}</code>
+                      <code className="text-2xs font-mono bg-muted px-1.5 py-0.5 rounded max-w-[300px] truncate">{log.sourceMessageId}</code>
                     </div>
                   )}
                 </div>
@@ -613,11 +626,11 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
             {/* Memory info */}
             {log.memorySource && (
               <div className="flex flex-col gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Memory</span>
-                <div className="rounded-lg border bg-fuchsia-500/5 border-fuchsia-500/20 p-3 space-y-1.5">
+                <span className="eyebrow">Memory</span>
+                <div className="rounded-lg border bg-chart-5/5 border-chart-5/20 p-3 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-muted-foreground">Source</span>
-                    <Badge variant="outline" className="text-[10px]">{log.memorySource}</Badge>
+                    <Badge variant="outline" className="text-2xs">{log.memorySource}</Badge>
                   </div>
                 </div>
               </div>
@@ -625,7 +638,7 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
 
             {/* Message content */}
             <div className="flex flex-col gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              <span className="eyebrow">
                 {isChat ? "Message Content" : isTool ? "Tool Output" : isMemory ? "Memory Operation" : "Content"}
               </span>
               <div className="rounded-lg border bg-card p-4 max-h-[280px] overflow-auto">
@@ -641,13 +654,13 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
             <div className="flex flex-col gap-2">
               <button
                 onClick={() => setShowRaw(!showRaw)}
-                className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 cursor-pointer hover:text-foreground transition-colors"
+                className="text-2xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 cursor-pointer hover:text-foreground transition-colors"
               >
                 Raw Payload
-                <span className="text-[9px]">{showRaw ? "▲" : "▼"}</span>
+                <span className="text-2xs">{showRaw ? "▲" : "▼"}</span>
               </button>
               {showRaw && (
-                <pre className="max-h-[300px] overflow-auto rounded-lg border bg-muted/30 p-3 text-[11px] font-mono whitespace-pre-wrap break-all leading-relaxed">
+                <pre className="max-h-[300px] overflow-auto rounded-lg border bg-muted/30 p-3 text-2xs font-mono whitespace-pre-wrap break-all leading-relaxed">
 {JSON.stringify(log.rawPayload, null, 2) || "null"}
                 </pre>
               )}
@@ -661,6 +674,7 @@ function LogDetails({ log, initialNowIso }: { log: NormalizedLog; initialNowIso:
 
 export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCount, initialNowIso, onPageChange, initialFilterGroup = "all", title }: LogsExplorerProps) {
   const [query, setQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [group, setGroup] = useState<FilterGroup>(initialFilterGroup as FilterGroup);
   const [level, setLevel] = useState("all");
   const [channel, setChannel] = useState("all");
@@ -707,6 +721,8 @@ export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCou
     return values;
   }, [page, pageCount]);
 
+  const activeFilterCount = [group, level, channel, agent].filter((value) => value !== "all").length;
+
   const rangeStart = totalCount === 0 ? 0 : (page - 1) * 50 + 1;
   const rangeEnd = Math.min(totalCount, page * 50);
 
@@ -717,11 +733,28 @@ export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCou
           <CardTitle>{title ?? (initialFilterGroup === "agenda" ? "Agenda Logs" : "Runtime Logs")}</CardTitle>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[260px] flex-1">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search logs..." className="pl-9" />
+            <div className="relative min-w-0 flex-1 md:min-w-[260px]">
+              <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search logs…" className="pl-9" />
             </div>
 
+            {/* Five side-by-side selects do not fit a phone, so they move into a sheet. */}
+            <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="sm" className="md:hidden">
+                  <FilterIcon className="size-4" aria-hidden />
+                  Filters
+                  {activeFilterCount > 0 ? (
+                    <Badge variant="secondary" className="h-4 px-1.5 text-2xs tabular-nums">{activeFilterCount}</Badge>
+                  ) : null}
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="bottom" className="max-h-[85svh] overflow-y-auto">
+                <SheetHeader>
+                  <SheetTitle>Filter logs</SheetTitle>
+                  <SheetDescription>Narrow the list by group, level, channel or agent.</SheetDescription>
+                </SheetHeader>
+                <div className="grid gap-3 px-4 pb-6 [&_button[data-slot=select-trigger]]:w-full">
             <Select value={group} onValueChange={(v) => setGroup(v as FilterGroup)}>
               <SelectTrigger className="w-[150px]"><SelectValue placeholder="All groups" /></SelectTrigger>
               <SelectContent>
@@ -765,11 +798,98 @@ export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCou
                 {agentOptions.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
               </SelectContent>
             </Select>
+                </div>
+              </SheetContent>
+            </Sheet>
+
+            <div className="hidden flex-wrap items-center gap-2 md:flex">
+            <Select value={group} onValueChange={(v) => setGroup(v as FilterGroup)}>
+              <SelectTrigger className="w-[150px]"><SelectValue placeholder="All groups" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All groups</SelectItem>
+                <SelectItem value="chat">Chat</SelectItem>
+                <SelectItem value="tool">Tools</SelectItem>
+                <SelectItem value="memory">Memory</SelectItem>
+                <SelectItem value="system">System / Heartbeat</SelectItem>
+                <SelectItem value="agenda">Agenda</SelectItem>
+                <SelectItem value="worker">Worker / Cron</SelectItem>
+                <SelectItem value="error">Warnings + Errors</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={level} onValueChange={setLevel}>
+              <SelectTrigger className="w-[130px]"><SelectValue placeholder="All levels" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All levels</SelectItem>
+                <SelectItem value="debug">Debug</SelectItem>
+                <SelectItem value="info">Info</SelectItem>
+                <SelectItem value="warning">Warning</SelectItem>
+                <SelectItem value="error">Error</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={channel} onValueChange={setChannel}>
+              <SelectTrigger className="w-[140px]"><SelectValue placeholder="All channels" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All channels</SelectItem>
+                <SelectItem value="internal">Internal</SelectItem>
+                <SelectItem value="telegram">Telegram</SelectItem>
+                <SelectItem value="gateway">Gateway</SelectItem>
+                <SelectItem value="qdrant">Memory</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={agent} onValueChange={setAgent}>
+              <SelectTrigger className="w-[180px]"><SelectValue placeholder="All agents" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All agents</SelectItem>
+                {agentOptions.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            </div>
           </div>
         </CardHeader>
 
         <CardContent className="space-y-3 flex flex-col h-full">
-          <div className="rounded-md border overflow-hidden flex-1 min-h-0 overflow-y-auto">
+          {/* Below md the eight-column table becomes one card per entry. */}
+          <div className="mc-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto md:hidden">
+            {filtered.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong px-4 py-12 text-center">
+                <ScrollTextIcon className="size-8 text-muted-foreground/50" aria-hidden />
+                <span className="text-sm font-medium text-foreground">No logs match your filters</span>
+                <span className="text-xs text-muted-foreground">Try a different search term, or clear the filters.</span>
+              </div>
+            ) : (
+              filtered.map((log) => (
+                <div
+                  key={log.id}
+                  className={cn(
+                    "rounded-xl border border-line bg-card p-3",
+                    log.level === "error" && "bg-danger-soft/40",
+                    log.level === "warning" && "bg-warning-soft/30",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className={cn("capitalize text-2xs", levelClasses[log.level] ?? levelClasses.info)}>{log.level}</Badge>
+                      <Badge variant="outline" className={cn("capitalize text-2xs", channelClasses[log.channelType] ?? channelClasses.internal)}>
+                        {channelLabel[log.channelType] ?? log.channelType ?? "internal"}
+                      </Badge>
+                      <span className="text-2xs tabular-nums text-muted-foreground">{fmtTime(log.occurredAt, initialNowIso)}</span>
+                    </div>
+                    <LogDetails log={log} initialNowIso={initialNowIso} />
+                  </div>
+                  <p className="mt-1.5 text-sm leading-tight font-semibold">{eventLabel(log.eventType || log.type)}</p>
+                  <p className="mt-0.5 text-2xs text-muted-foreground">{log.agentName}</p>
+                  {log.messagePreview ? (
+                    <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted-foreground">{log.messagePreview}</p>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="mc-scrollbar hidden min-h-0 flex-1 overflow-hidden overflow-y-auto rounded-md border border-line md:block">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
@@ -788,9 +908,9 @@ export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCou
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-16">
                       <div className="flex flex-col items-center gap-2">
-                        <span className="text-3xl">📭</span>
-                        <span className="text-sm text-muted-foreground font-medium">No logs match your filters</span>
-                        <span className="text-xs text-muted-foreground/60">Try adjusting your search or filter criteria</span>
+                        <ScrollTextIcon className="size-8 text-muted-foreground/50" aria-hidden />
+                        <span className="text-sm font-medium text-foreground">No logs match your filters</span>
+                        <span className="text-xs text-muted-foreground">Try a different search term, or clear the filters.</span>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -798,36 +918,36 @@ export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCou
                   return (
                     <TableRow key={log.id} className={cn(
                       "transition-colors",
-                      log.level === "error" && "bg-red-500/[0.03] hover:bg-red-500/[0.06]",
-                      log.level === "warning" && "bg-amber-500/[0.02] hover:bg-amber-500/[0.04]",
+                      log.level === "error" && "bg-danger-soft/40 hover:bg-danger-soft/70",
+                      log.level === "warning" && "bg-warning-soft/30 hover:bg-warning-soft/60",
                     )}>
                       <TableCell className="text-xs text-muted-foreground tabular-nums">{fmtTime(log.occurredAt, initialNowIso)}</TableCell>
-                      <TableCell><Badge variant="outline" className={cn("capitalize text-[10px]", levelClasses[log.level] ?? levelClasses.info)}>{log.level}</Badge></TableCell>
+                      <TableCell><Badge variant="outline" className={cn("capitalize text-2xs", levelClasses[log.level] ?? levelClasses.info)}>{log.level}</Badge></TableCell>
                       <TableCell className="max-w-[220px]">
-                        <div className="font-semibold text-[13px] leading-tight">{eventLabel(log.eventType || log.type)}</div>
-                        <div className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">{log.eventType || log.type}</div>
+                        <div className="font-semibold text-sm leading-tight">{eventLabel(log.eventType || log.type)}</div>
+                        <div className="text-2xs text-muted-foreground/60 font-mono mt-0.5">{log.eventType || log.type}</div>
                       </TableCell>
-                      <TableCell><Badge variant="outline" className={cn("capitalize text-[10px]", channelClasses[log.channelType] ?? channelClasses.internal)}>{channelLabel[log.channelType] ?? log.channelType ?? "internal"}</Badge></TableCell>
+                      <TableCell><Badge variant="outline" className={cn("capitalize text-2xs", channelClasses[log.channelType] ?? channelClasses.internal)}>{channelLabel[log.channelType] ?? log.channelType ?? "internal"}</Badge></TableCell>
                       <TableCell className="text-sm font-medium">{log.agentName}</TableCell>
                       <TableCell className="max-w-[180px]">
                         {log.eventTitle ? (
-                          <span className="text-[12px] font-medium text-primary/80 truncate block" title={log.eventTitle}>
+                          <span className="text-xs font-medium text-primary/80 truncate block" title={log.eventTitle}>
                             {log.eventTitle}
                           </span>
                         ) : log.agendaOccurrenceId ? (
-                          <code className="text-[10px] font-mono text-muted-foreground/50 bg-muted/30 px-1.5 py-0.5 rounded border border-muted/20 truncate block" title={log.agendaOccurrenceId}>
+                          <code className="text-2xs font-mono text-muted-foreground/50 bg-muted/30 px-1.5 py-0.5 rounded border border-muted/20 truncate block" title={log.agendaOccurrenceId}>
                             {log.agendaOccurrenceId.slice(0, 8)}
                           </code>
                         ) : log.ticketId ? (
-                          <code className="text-[10px] font-mono text-amber-600/70 bg-amber-500/5 px-1.5 py-0.5 rounded border border-amber-500/10 truncate block" title={log.ticketId}>
+                          <code className="text-2xs font-mono text-warning-fg bg-warning-soft px-1.5 py-0.5 rounded border border-warning/20 truncate block" title={log.ticketId}>
                             {log.ticketId.slice(0, 8)}
                           </code>
                         ) : (
-                          <span className="text-[10px] text-muted-foreground/30">—</span>
+                          <span className="text-2xs text-muted-foreground/60">—</span>
                         )}
                       </TableCell>
                       <TableCell className="max-w-[480px]">
-                        <p className="text-[12px] text-muted-foreground leading-relaxed line-clamp-2">{log.messagePreview}</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{log.messagePreview}</p>
                       </TableCell>
                       <TableCell className="text-right"><LogDetails log={log} initialNowIso={initialNowIso} /></TableCell>
                     </TableRow>
@@ -840,15 +960,28 @@ export function LogsExplorer({ logs = [], agents = [], page, pageCount, totalCou
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm text-muted-foreground">Showing {rangeStart}-{rangeEnd} of {totalCount} • Page {page} of {pageCount}</div>
             <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(1)}>First</Button>
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(Math.max(1, page - 1))}>Previous</Button>
+              <Button variant="outline" size="sm" className="hidden sm:inline-flex" disabled={page <= 1} onClick={() => onPageChange(1)}>First</Button>
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(Math.max(1, page - 1))} aria-label="Previous page">
+                <span className="hidden sm:inline">Previous</span>
+                <IconChevronLeftSmall className="size-4 sm:hidden" aria-hidden />
+              </Button>
               {pageButtons.map((p) => (
-                <Button key={p} variant={p === page ? "default" : "outline"} size="sm" onClick={() => onPageChange(p)}>
+                <Button
+                  key={p}
+                  variant={p === page ? "default" : "outline"}
+                  size="sm"
+                  className={cn(p !== page && "hidden sm:inline-flex")}
+                  aria-current={p === page ? "page" : undefined}
+                  onClick={() => onPageChange(p)}
+                >
                   {p}
                 </Button>
               ))}
-              <Button variant="outline" size="sm" disabled={page >= pageCount} onClick={() => onPageChange(Math.min(pageCount, page + 1))}>Next</Button>
-              <Button variant="outline" size="sm" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>Last</Button>
+              <Button variant="outline" size="sm" disabled={page >= pageCount} onClick={() => onPageChange(Math.min(pageCount, page + 1))} aria-label="Next page">
+                <span className="hidden sm:inline">Next</span>
+                <IconChevronRightSmall className="size-4 sm:hidden" aria-hidden />
+              </Button>
+              <Button variant="outline" size="sm" className="hidden sm:inline-flex" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>Last</Button>
             </div>
           </div>
         </CardContent>

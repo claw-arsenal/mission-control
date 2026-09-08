@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { Assignee, Label, Ticket } from "@/types/tasks";
 import { cn } from "@/lib/utils";
@@ -25,14 +26,20 @@ function startOfMonth(year: number, month: number): Date {
   return new Date(year, month, 1);
 }
 
+/** Priority reads as severity, so it uses the status vocabulary: low is quiet, urgent is danger. */
+const PRIORITY_DOT: Record<Ticket["priority"], string> = {
+  low: "bg-muted-foreground/60",
+  medium: "bg-info",
+  high: "bg-warning",
+  urgent: "bg-danger",
+};
+
 function priorityDotClass(p: Ticket["priority"]): string {
-  switch (p) {
-    case "urgent": return "bg-rose-600";
-    case "high": return "bg-orange-500";
-    case "medium": return "bg-amber-500";
-    default: return "bg-emerald-500";
-  }
+  return PRIORITY_DOT[p] ?? PRIORITY_DOT.low;
 }
+
+const longDate = (d: Date) =>
+  d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
 export function CalendarView({ tickets, labelById, onTicketClick }: Props) {
   const today = useMemo(() => {
@@ -40,6 +47,7 @@ export function CalendarView({ tickets, labelById, onTicketClick }: Props) {
     return new Date(t.getFullYear(), t.getMonth(), t.getDate());
   }, []);
   const [cursor, setCursor] = useState<Date>(today);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const { year, month } = useMemo(() => ({ year: cursor.getFullYear(), month: cursor.getMonth() }), [cursor]);
 
@@ -70,27 +78,64 @@ export function CalendarView({ tickets, labelById, onTicketClick }: Props) {
     [year, month],
   );
 
+  const todayKey = dateKey(today);
+
+  // Roving tab stop: one cell in the grid is tabbable, arrow keys move between them.
+  const [focusedKey, setFocusedKey] = useState<string>(todayKey);
+  const cellKeys = useMemo(() => cells.map(dateKey), [cells]);
+  const defaultKey = useMemo(
+    () => (cellKeys.includes(todayKey) ? todayKey : dateKey(startOfMonth(year, month))),
+    [cellKeys, todayKey, year, month],
+  );
+  const activeKey = cellKeys.includes(focusedKey) ? focusedKey : defaultKey;
+
+  const monthTicketCount = useMemo(
+    () =>
+      cellKeys.reduce((acc, key, i) => (cells[i].getMonth() === month ? acc + (ticketsByDay[key]?.length ?? 0) : acc), 0),
+    [cellKeys, cells, month, ticketsByDay],
+  );
+
   const goPrev = () => setCursor(new Date(year, month - 1, 1));
   const goNext = () => setCursor(new Date(year, month + 1, 1));
-  const goToday = () => setCursor(today);
+  const goToday = () => { setCursor(today); setFocusedKey(todayKey); };
 
-  const todayKey = dateKey(today);
+  const handleGridKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>, index: number) => {
+      const deltas: Record<string, number> = {
+        ArrowLeft: -1,
+        ArrowRight: 1,
+        ArrowUp: -7,
+        ArrowDown: 7,
+      };
+      let nextIndex: number | null = null;
+      if (event.key in deltas) nextIndex = index + deltas[event.key];
+      else if (event.key === "Home") nextIndex = index - (index % 7);
+      else if (event.key === "End") nextIndex = index - (index % 7) + 6;
+      if (nextIndex === null) return;
+      if (nextIndex < 0 || nextIndex >= cellKeys.length) return;
+      event.preventDefault();
+      const nextKey = cellKeys[nextIndex];
+      setFocusedKey(nextKey);
+      gridRef.current?.querySelector<HTMLElement>(`[data-day="${nextKey}"]`)?.focus();
+    },
+    [cellKeys],
+  );
 
   return (
     <div className="flex h-full flex-col">
       {/* Month header */}
-      <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">{monthLabel}</h3>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {Object.values(ticketsByDay).reduce((acc, ts) => acc + ts.length, 0)} dated tickets
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {monthTicketCount} dated {monthTicketCount === 1 ? "ticket" : "tickets"}
           </span>
         </div>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon-sm" onClick={goPrev} aria-label="Previous month">
             <ChevronLeftIcon className="size-4" />
           </Button>
-          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={goToday}>
+          <Button variant="outline" size="xs" onClick={goToday}>
             Today
           </Button>
           <Button variant="ghost" size="icon-sm" onClick={goNext} aria-label="Next month">
@@ -99,39 +144,70 @@ export function CalendarView({ tickets, labelById, onTicketClick }: Props) {
         </div>
       </div>
 
+      {monthTicketCount === 0 && (
+        <Empty className="min-h-0 rounded-none border-x-0 border-t-0 border-line px-3 py-4">
+          <EmptyHeader>
+            <EmptyTitle className="text-sm">Nothing due in {monthLabel}</EmptyTitle>
+            <EmptyDescription className="text-xs">
+              Tickets with a due date in this month appear on their day. Give a ticket a due date to
+              see it here.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+
       {/* Weekday strip */}
-      <div className="grid grid-cols-7 border-b text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+      <div className="grid grid-cols-7 border-b border-line">
         {WEEKDAYS.map((d) => (
-          <div key={d} className="px-2 py-1.5 text-center">{d}</div>
+          <div key={d} className="eyebrow px-2 py-1.5 text-center">{d}</div>
         ))}
       </div>
 
       {/* Days grid */}
-      <div className="grid flex-1 grid-cols-7 grid-rows-6 overflow-auto">
-        {cells.map((d) => {
+      <div
+        ref={gridRef}
+        role="grid"
+        aria-label={`${monthLabel} calendar`}
+        className="grid flex-1 grid-cols-7 grid-rows-6 overflow-auto"
+      >
+        {cells.map((d, index) => {
           const key = dateKey(d);
           const inMonth = d.getMonth() === month;
           const isToday = key === todayKey;
           const dayTickets = ticketsByDay[key] ?? [];
+          const countLabel =
+            dayTickets.length === 0
+              ? "no tickets due"
+              : `${dayTickets.length} ${dayTickets.length === 1 ? "ticket" : "tickets"} due`;
           return (
             <div
               key={key}
+              role="gridcell"
+              data-day={key}
+              tabIndex={key === activeKey ? 0 : -1}
+              aria-label={`${longDate(d)}, ${countLabel}`}
+              aria-current={isToday ? "date" : undefined}
+              onFocus={() => setFocusedKey(key)}
+              onKeyDown={(event) => handleGridKeyDown(event, index)}
               className={cn(
-                "flex min-h-[88px] flex-col gap-1 border-b border-r p-1.5",
-                !inMonth && "bg-muted/20 text-muted-foreground/60",
+                "flex min-h-[88px] flex-col gap-1 border-b border-r border-line p-1.5 outline-none",
+                "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+                !inMonth && "bg-surface-2 text-muted-foreground",
               )}
             >
               <div className="flex items-center justify-between">
                 <span
                   className={cn(
-                    "inline-flex size-5 items-center justify-center rounded-full text-[10px] font-medium tabular-nums",
+                    "inline-flex size-5 items-center justify-center rounded-full text-2xs font-medium tabular-nums",
                     isToday && "bg-foreground text-background",
                   )}
                 >
                   {d.getDate()}
                 </span>
                 {dayTickets.length > 3 && (
-                  <span className="text-[9px] text-muted-foreground tabular-nums">{dayTickets.length}</span>
+                  <span className="text-2xs tabular-nums text-muted-foreground" aria-hidden>
+                    {dayTickets.length}
+                  </span>
                 )}
               </div>
               <div className="flex flex-1 flex-col gap-0.5 overflow-hidden">
@@ -141,13 +217,19 @@ export function CalendarView({ tickets, labelById, onTicketClick }: Props) {
                   return (
                     <button
                       key={t.id}
+                      type="button"
                       onClick={() => onTicketClick(t.id)}
-                      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[10px] transition-colors hover:bg-accent"
+                      className={cn(
+                        "flex items-center gap-1 truncate rounded px-1 py-0.5 text-left text-2xs",
+                        "transition-colors duration-(--dur-fast) ease-(--ease-out) hover:bg-surface-hover",
+                        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                      )}
                       title={t.title}
                     >
                       <span
                         className={cn("size-1.5 shrink-0 rounded-full", !swatch && priorityDotClass(t.priority))}
                         style={swatch ? { backgroundColor: swatch } : undefined}
+                        aria-hidden
                       />
                       <span className="truncate">{t.title}</span>
                     </button>
@@ -155,8 +237,13 @@ export function CalendarView({ tickets, labelById, onTicketClick }: Props) {
                 })}
                 {dayTickets.length > 3 && (
                   <button
+                    type="button"
                     onClick={() => onTicketClick(dayTickets[3].id)}
-                    className="px-1 text-left text-[9px] text-muted-foreground hover:text-foreground"
+                    className={cn(
+                      "rounded px-1 text-left text-2xs text-muted-foreground",
+                      "transition-colors duration-(--dur-fast) ease-(--ease-out) hover:text-foreground",
+                      "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                    )}
                   >
                     +{dayTickets.length - 3} more
                   </button>

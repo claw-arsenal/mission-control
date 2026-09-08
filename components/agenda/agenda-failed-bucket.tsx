@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { IconCircleCheck } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -158,7 +159,7 @@ export function AgendaFailedDialog({ open, onOpenChange }: Props): React.ReactEl
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <IconAlertTriangle className="size-5 text-amber-500" />
+            <IconAlertTriangle className="size-5 text-warning" />
             Failed Events
             {items.length > 0 && (
               <Badge variant="destructive" className="ml-1 text-xs">
@@ -177,9 +178,10 @@ export function AgendaFailedDialog({ open, onOpenChange }: Props): React.ReactEl
               {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
             </div>
           ) : items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <span className="text-3xl mb-3">✅</span>
-              <p className="text-sm text-muted-foreground">All clear — no failed events</p>
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+              <IconCircleCheck className="size-8 text-success" aria-hidden />
+              <p className="text-sm font-medium text-foreground">No failed events</p>
+              <p className="text-xs text-muted-foreground">Runs that fail show up here so you can retry them.</p>
             </div>
           ) : (
             <div className="flex flex-col gap-3 p-1">
@@ -200,11 +202,11 @@ export function AgendaFailedDialog({ open, onOpenChange }: Props): React.ReactEl
                         {formatScheduledFor(occ.scheduled_for)}
                       </span>
                       {occ.default_agent_id && (
-                        <span className="font-mono text-[10px] bg-muted px-1.5 py-0.5 rounded">
+                        <span className="font-mono text-2xs bg-muted px-1.5 py-0.5 rounded">
                           {occ.default_agent_id}
                         </span>
                       )}
-                      <span className="text-[10px]">
+                      <span className="text-2xs">
                         Attempt #{occ.latest_attempt_no}
                       </span>
                     </div>

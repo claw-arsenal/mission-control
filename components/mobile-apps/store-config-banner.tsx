@@ -46,8 +46,8 @@ export function StoreConfigBanner() {
   if (messages.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-      <div className="mb-1 flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
+    <div className="rounded-xl border border-warning/40 bg-warning-soft p-3 text-sm">
+      <div className="mb-1 flex items-center gap-2 font-medium text-warning-fg">
         <IconAlertTriangle className="size-4" />
         Some stores aren’t syncing
       </div>

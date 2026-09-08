@@ -3,13 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BellIcon, CheckCheckIcon, InfoIcon } from "lucide-react";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 type NotificationRow = {
@@ -61,12 +66,13 @@ function relativeTime(dateStr: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+/** Priority reads as severity, matching the board cards. */
 function priorityDotClass(p: string): string {
   switch (p) {
-    case "urgent": return "bg-rose-600";
-    case "high": return "bg-orange-500";
-    case "medium": return "bg-amber-500";
-    default: return "bg-emerald-500";
+    case "urgent": return "bg-danger";
+    case "high": return "bg-warning";
+    case "medium": return "bg-info";
+    default: return "bg-muted-foreground/60";
   }
 }
 
@@ -80,6 +86,8 @@ export function NotificationsBell() {
   const [unread, setUnread] = useState(0);
   const [authState, setAuthState] = useState<AuthState>("loading");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const load = useCallback(async () => {
@@ -90,15 +98,18 @@ export function NotificationsBell() {
         setAuthState("unauthenticated");
         return;
       }
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`The inbox request failed (${res.status}).`);
       const json = await res.json();
-      if (json.ok) {
-        setAuthState("ready");
-        setItems(json.notifications || []);
-        setAssigned(json.assignedTickets || []);
-        setDiagnostics(json.diagnostics || null);
-        setUnread(Number(json.unread || 0));
-      }
+      if (!json.ok) throw new Error(typeof json.error === "string" ? json.error : "The inbox could not be read.");
+      setAuthState("ready");
+      setItems(json.notifications || []);
+      setAssigned(json.assignedTickets || []);
+      setDiagnostics(json.diagnostics || null);
+      setUnread(Number(json.unread || 0));
+      setError(null);
+    } catch (err) {
+      // A failed inbox must not read as "all caught up".
+      setError(err instanceof Error ? err.message : "The inbox could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -182,80 +193,87 @@ export function NotificationsBell() {
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
-          size="icon"
-          className="relative size-8"
-          aria-label={unread > 0 ? `${unread} unread notifications` : "Notifications"}
+          size="icon-sm"
+          className="relative"
+          aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
         >
-          <BellIcon className="size-4" />
+          <BellIcon />
           {unread > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-semibold leading-none text-destructive-foreground tabular-nums">
+            <Badge
+              variant="destructive"
+              className="absolute -top-1 -right-1 h-4 min-w-4 justify-center px-1 text-2xs leading-none tabular-nums"
+            >
               {unread > 99 ? "99+" : unread}
-            </span>
+            </Badge>
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[380px] p-0">
+      <PopoverContent align="end" className="w-[min(24rem,calc(100vw-2rem))] p-0">
         {authState === "unauthenticated" ? (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            Sign in to see your inbox.
-          </div>
+          <Empty className="border-0 bg-transparent">
+            <EmptyHeader>
+              <EmptyTitle>Sign in to see your inbox</EmptyTitle>
+              <EmptyDescription>Mentions and the tickets assigned to you appear here once you are signed in.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
-          <>
-            {/* Header */}
-            <div className="flex items-center justify-between border-b px-3 py-2">
-              <span className="text-xs font-semibold uppercase tracking-wide">Inbox</span>
+          <Tabs value={tab} onValueChange={(value) => setTab(value as "mentions" | "assigned")}>
+            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+              <span className="eyebrow">Inbox</span>
               {tab === "mentions" && unread > 0 && (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="h-7 gap-1 text-xs"
-                  onClick={() => void markAllRead()}
+                  disabled={markingAll}
+                  onClick={() => {
+                    setMarkingAll(true);
+                    void markAllRead().finally(() => setMarkingAll(false));
+                  }}
                 >
-                  <CheckCheckIcon className="size-3" /> Mark all read
+                  {markingAll ? <Spinner className="size-3" /> : <CheckCheckIcon className="size-3" />}
+                  Mark all read
                 </Button>
               )}
             </div>
 
-            {/* Segmented tabs */}
-            <div className="flex border-b text-xs">
-              <button
-                onClick={() => setTab("mentions")}
-                className={cn(
-                  "flex-1 px-3 py-2 transition-colors",
-                  tab === "mentions" ? "border-b-2 border-foreground font-semibold" : "text-muted-foreground hover:text-foreground",
+            <TabsList className="w-full rounded-none border-b border-line bg-transparent p-0">
+              <TabsTrigger value="mentions" className="flex-1 gap-1.5 rounded-none border-0 data-[state=active]:bg-surface-hover">
+                Mentions
+                {unread > 0 && (
+                  <Badge variant="destructive" className="h-4 px-1.5 text-2xs tabular-nums">{unread}</Badge>
                 )}
-              >
-                Mentions {unread > 0 && <span className="ml-1 rounded-full bg-destructive/15 px-1.5 text-[10px] font-medium text-destructive tabular-nums">{unread}</span>}
-              </button>
-              <button
-                onClick={() => setTab("assigned")}
-                className={cn(
-                  "flex-1 px-3 py-2 transition-colors",
-                  tab === "assigned" ? "border-b-2 border-foreground font-semibold" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                My tickets <span className="ml-1 rounded-full bg-foreground/10 px-1.5 text-[10px] font-medium tabular-nums">{assigned.length}</span>
-              </button>
-            </div>
+              </TabsTrigger>
+              <TabsTrigger value="assigned" className="flex-1 gap-1.5 rounded-none border-0 data-[state=active]:bg-surface-hover">
+                My tickets
+                <Badge variant="secondary" className="h-4 px-1.5 text-2xs tabular-nums">{assigned.length}</Badge>
+              </TabsTrigger>
+            </TabsList>
 
-            <ScrollArea className="max-h-[420px]">
-              {tab === "mentions" ? (
-                <MentionsTab
-                  items={items}
-                  loading={loading}
-                  diagnostics={diagnostics}
-                  onOpen={openTicket}
-                />
-              ) : (
-                <AssignedTab
-                  items={assigned}
-                  loading={loading}
-                  diagnostics={diagnostics}
-                  onOpen={openTicket}
-                />
-              )}
-            </ScrollArea>
-          </>
+            {error ? (
+              <div className="p-3">
+                <Alert variant="destructive">
+                  <AlertTitle>Inbox unavailable</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                  <AlertActions>
+                    <Button size="sm" variant="outline" disabled={loading} onClick={() => void load()}>
+                      {loading ? <Spinner className="size-3" /> : null}
+                      Try again
+                    </Button>
+                  </AlertActions>
+                </Alert>
+              </div>
+            ) : (
+              <div className="mc-scrollbar max-h-[26rem] overflow-y-auto overscroll-contain">
+                <TabsContent value="mentions" className="m-0">
+                  <MentionsTab items={items} loading={loading} diagnostics={diagnostics} onOpen={openTicket} />
+                </TabsContent>
+                <TabsContent value="assigned" className="m-0">
+                  <AssignedTab items={assigned} loading={loading} diagnostics={diagnostics} onOpen={openTicket} />
+                </TabsContent>
+              </div>
+            )}
+          </Tabs>
         )}
       </PopoverContent>
     </Popover>
@@ -273,14 +291,12 @@ function MentionsTab({
   diagnostics: Diagnostics | null;
   onOpen: (boardId: string | null, ticketId: string | null, notificationId?: string) => void;
 }) {
-  if (loading && items.length === 0) {
-    return <p className="px-3 py-6 text-center text-xs text-muted-foreground">Loading…</p>;
-  }
+  if (loading && items.length === 0) return <RowSkeletons />;
   if (items.length === 0) {
     return <EmptyMentions diagnostics={diagnostics} />;
   }
   return (
-    <ul className="divide-y">
+    <ul className="divide-y divide-line">
       {items.map((n) => {
         const unreadRow = !n.read_at;
         return (
@@ -288,13 +304,13 @@ function MentionsTab({
             <button
               onClick={() => onOpen(n.board_id, n.ticket_id, n.id)}
               className={cn(
-                "block w-full px-3 py-2.5 text-left transition-colors hover:bg-muted/40",
-                unreadRow && "bg-blue-500/[0.04]",
+                "block w-full px-3 py-2.5 text-left transition-colors duration-(--dur-fast) outline-none hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
+                unreadRow && "bg-info-soft",
               )}
             >
               <div className="flex items-start gap-2">
                 {unreadRow && (
-                  <span className="mt-1.5 inline-block size-1.5 shrink-0 rounded-full bg-blue-500" />
+                  <span className="mt-1.5 inline-block size-1.5 shrink-0 rounded-full bg-info" aria-label="Unread" />
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="text-xs">
@@ -309,9 +325,9 @@ function MentionsTab({
                     )}
                   </p>
                   {n.preview && (
-                    <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{n.preview}</p>
+                    <p className="mt-1 line-clamp-2 text-2xs text-muted-foreground">{n.preview}</p>
                   )}
-                  <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground/70">
+                  <div className="mt-1 flex items-center gap-1 text-2xs text-muted-foreground">
                     {n.board_name && <span className="truncate">{n.board_name}</span>}
                     {n.board_name && <span>·</span>}
                     <span className="tabular-nums">{relativeTime(n.created_at)}</span>
@@ -337,25 +353,23 @@ function AssignedTab({
   diagnostics: Diagnostics | null;
   onOpen: (boardId: string | null, ticketId: string | null) => void;
 }) {
-  if (loading && items.length === 0) {
-    return <p className="px-3 py-6 text-center text-xs text-muted-foreground">Loading…</p>;
-  }
+  if (loading && items.length === 0) return <RowSkeletons />;
   if (items.length === 0) {
     return <EmptyAssigned diagnostics={diagnostics} />;
   }
   return (
-    <ul className="divide-y">
+    <ul className="divide-y divide-line">
       {items.map((t) => (
         <li key={t.id}>
           <button
             onClick={() => onOpen(t.board_id, t.id)}
-            className="block w-full px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+            className="block w-full px-3 py-2.5 text-left transition-colors duration-(--dur-fast) outline-none hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
           >
             <div className="flex items-start gap-2">
               <span className={cn("mt-1.5 inline-block size-1.5 shrink-0 rounded-full", priorityDotClass(t.priority))} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-medium text-foreground">{t.title}</p>
-                <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground/70">
+                <div className="mt-1 flex items-center gap-1 text-2xs text-muted-foreground">
                   <span className="truncate">{t.board_name}</span>
                   <span>·</span>
                   <span className="truncate">{t.column_title}</span>
@@ -375,48 +389,72 @@ function AssignedTab({
   );
 }
 
-function EmptyMentions({ diagnostics }: { diagnostics: Diagnostics | null }) {
-  if (!diagnostics) {
-    return <p className="px-3 py-8 text-center text-xs text-muted-foreground">You are all caught up.</p>;
-  }
-  if (!diagnostics.hasMatchingAssignee) {
-    return (
-      <div className="px-3 py-6">
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-          <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-          <div className="min-w-0">
-            <p className="font-medium text-foreground">Mentions will not reach you yet</p>
-            <p className="mt-1 text-muted-foreground">
-              No board assignee has an email matching{" "}
-              <span className="rounded bg-muted px-1 font-mono text-[10px]">{diagnostics.sessionEmail}</span>.
-              Open the boards toolbar → <span className="font-medium">Assignees</span> and add yourself
-              with your email so others can <span className="font-mono">@you</span>.
-            </p>
+function RowSkeletons() {
+  return (
+    <ul className="divide-y divide-line" aria-busy="true" aria-label="Loading inbox">
+      {[0, 1, 2].map((row) => (
+        <li key={row} className="flex items-start gap-2 px-3 py-2.5">
+          <Skeleton className="mt-1 size-1.5 rounded-full" />
+          <div className="flex-1 space-y-1.5">
+            <Skeleton className="h-3 w-3/4" />
+            <Skeleton className="h-3 w-1/2" />
           </div>
-        </div>
-      </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Explains why an inbox is empty when the account is not wired up as an assignee. */
+function NotReachableNotice({ title, email, children }: { title: string; email: string; children: React.ReactNode }) {
+  return (
+    <div className="p-3">
+      <Alert variant="warning">
+        <InfoIcon />
+        <AlertTitle>{title}</AlertTitle>
+        <AlertDescription>
+          <p>
+            No board assignee has the email{" "}
+            <span className="rounded bg-surface-2 px-1 font-mono text-2xs">{email}</span>. {children}
+          </p>
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
+}
+
+function EmptyMentions({ diagnostics }: { diagnostics: Diagnostics | null }) {
+  if (diagnostics && !diagnostics.hasMatchingAssignee) {
+    return (
+      <NotReachableNotice title="Mentions will not reach you yet" email={diagnostics.sessionEmail}>
+        Open a board, choose Board then Manage assignees, and add yourself with your email so others can mention you.
+      </NotReachableNotice>
     );
   }
-  return <p className="px-3 py-8 text-center text-xs text-muted-foreground">You are all caught up.</p>;
+  return (
+    <Empty className="border-0 bg-transparent">
+      <EmptyHeader>
+        <EmptyTitle>You are all caught up</EmptyTitle>
+        <EmptyDescription>Comments that mention you show up here.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
 }
 
 function EmptyAssigned({ diagnostics }: { diagnostics: Diagnostics | null }) {
   if (diagnostics && !diagnostics.hasMatchingAssignee) {
     return (
-      <div className="px-3 py-6">
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-          <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-          <div className="min-w-0">
-            <p className="font-medium text-foreground">Nothing assigned to you yet</p>
-            <p className="mt-1 text-muted-foreground">
-              No board assignee has the email{" "}
-              <span className="rounded bg-muted px-1 font-mono text-[10px]">{diagnostics.sessionEmail}</span>.
-              Add yourself as an assignee on a board first.
-            </p>
-          </div>
-        </div>
-      </div>
+      <NotReachableNotice title="Nothing assigned to you yet" email={diagnostics.sessionEmail}>
+        Add yourself as an assignee on a board first.
+      </NotReachableNotice>
     );
   }
-  return <p className="px-3 py-8 text-center text-xs text-muted-foreground">Nothing assigned to you.</p>;
+  return (
+    <Empty className="border-0 bg-transparent">
+      <EmptyHeader>
+        <EmptyTitle>Nothing assigned to you</EmptyTitle>
+        <EmptyDescription>Tickets where you are an assignee show up here.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
 }

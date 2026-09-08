@@ -11,7 +11,7 @@ export default function AgentsPage() {
   return (
     <SidebarProvider
       style={
-        { "--sidebar-width": "calc(var(--spacing) * 72)", "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties
+        { "--header-height": "calc(var(--spacing) * 14)" } as React.CSSProperties
       }
     >
       <AppSidebar variant="inset" initialUser={null} />

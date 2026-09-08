@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useMemo, useState, useEffect } from "react";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { PageHeader } from "@/components/layout/page-header";
 import { ClearLogsButton } from "@/components/agents/clear-logs-button";
 import { LogsExplorer } from "@/components/agents/logs-explorer";
 import { LogsLiveRefresh } from "@/components/agents/logs-live-refresh";
 import { ServiceManager } from "@/components/agents/service-manager";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollTextIcon, ServerIcon, CalendarClockIcon } from "lucide-react";
 import type { Agent, AgentLog } from "@/types/agents";
@@ -50,11 +53,13 @@ export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, in
   const [agendaLogs, setAgendaLogs] = useState<AgentLog[]>([]);
   const [agendaPageInfo, setAgendaPageInfo] = useState<PageInfo>({ page: 1, limit: 50, totalCount: 0, pageCount: 1 });
   const [agendaLoading, setAgendaLoading] = useState(false);
+  const [agendaError, setAgendaError] = useState<string | null>(null);
 
   const isFirstPage = pageInfo.page === 1;
 
   const loadAgendaLogs = useCallback(async (p = 1) => {
     setAgendaLoading(true);
+    setAgendaError(null);
     try {
       const res = await fetch(`/api/agenda/logs?limit=${agendaPageInfo.limit}&page=${p}`, { cache: "reload" });
       const json = await res.json();
@@ -67,7 +72,9 @@ export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, in
           pageCount: Math.max(1, Math.ceil((json.total ?? 0) / prev.limit)),
         }));
       }
-    } catch { /* ignore */ } finally {
+    } catch (err) {
+      setAgendaError(err instanceof Error ? err.message : "Agenda logs could not be loaded.");
+    } finally {
       setAgendaLoading(false);
     }
   }, [agendaPageInfo.limit]);
@@ -148,10 +155,21 @@ export function LogsPageClient({ initialLogs, initialAgents, initialPageInfo, in
           </TabsContent>
 
           <TabsContent value="agenda" className="mt-4">
-            {agendaLoading && agendaLogs.length === 0 ? (
-              <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground px-2">
-                <CalendarClockIcon className="size-4 animate-pulse" />
-                Loading agenda logs…
+            {agendaError ? (
+              <Alert variant="destructive">
+                <AlertTitle>Agenda logs unavailable</AlertTitle>
+                <AlertDescription>{agendaError}</AlertDescription>
+                <AlertActions>
+                  <Button size="sm" variant="outline" onClick={() => void onAgendaPageChange(agendaPageInfo.page)}>
+                    Try again
+                  </Button>
+                </AlertActions>
+              </Alert>
+            ) : agendaLoading && agendaLogs.length === 0 ? (
+              <div className="flex flex-col gap-2 px-2 py-4" aria-busy="true" aria-label="Loading agenda logs">
+                {[0, 1, 2, 3].map((row) => (
+                  <Skeleton key={row} className="h-9 w-full" />
+                ))}
               </div>
             ) : (
               <LogsExplorer
