@@ -40,13 +40,14 @@ A missed notification is not fatal: reconnecting, coming back online, and return
 
 Verified on 8 September 2026 against the repository, not a deployment.
 
-- `npm test`: 395 passed and 25 skipped across 81 files. The skipped suites need a configured PostgreSQL test database. The run covers the whole repository, so it includes work outside this module.
+- `npm test`: 395 passed and 25 skipped across 81 files. The run covers the whole repository, so it includes work outside this module.
+- Against a disposable PostgreSQL 15.19 database, with `MOBILE_REPORTS_TEST_DATABASE_URL` and `MOBILE_REVIEWS_TEST_DATABASE_URL` set, the normally skipped database suites also run: **417 passed, 5 skipped across 82 files**, and all 248 Mobile Applications tests pass. This exercised the new list-facts query, review upserts, the job ledger, the worker, rollups and freshness against a real server.
 - `npm run typecheck` and `npm run lint`: no errors.
 - `npm run build`: compiled successfully; both Mobile Applications routes render on demand as before.
-- New suites: `lib/mobile-apps/change-events.test.ts`, `lib/mobile-apps/client/live-store.test.ts`, `lib/mobile-apps/list-route.test.ts`, `components/mobile-apps/mobile-apps-client.test.tsx`, `components/mobile-apps/app-detail-client.test.tsx`, plus extended stream, detail, ensure-fresh, reviews, worker and review-hook suites.
+- New suites: `lib/mobile-apps/change-events.test.ts`, `lib/mobile-apps/client/live-store.test.ts`, `lib/mobile-apps/list-route.test.ts`, `lib/mobile-apps/list-facts-postgres.test.ts`, `components/mobile-apps/mobile-apps-client.test.tsx`, `components/mobile-apps/app-detail-client.test.tsx`, plus extended stream, detail, ensure-fresh, reviews, worker and review-hook suites.
 - The fixture preview (`npm run preview:mobile-apps`, then `http://127.0.0.1:4173/tests/previews/mobile-apps.html`) now publishes typed changes, drops and restores the connection, injects new reviews, and switches between the list and the detail page. It uses no credentials and no database.
 
-Live store credentials, the deployed worker, and a full screen-reader pass were not exercised here.
+Live store credentials, the deployed worker, and a full screen-reader pass were not exercised here. The database checks used a throwaway container, not the project's own database.
 
 ## Migration notes
 
