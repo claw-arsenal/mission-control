@@ -45,7 +45,10 @@ Verified on 8 September 2026 against the repository, not a deployment.
 - `npm run typecheck` and `npm run lint`: no errors.
 - `npm run build`: compiled successfully; both Mobile Applications routes render on demand as before.
 - New suites: `lib/mobile-apps/change-events.test.ts`, `lib/mobile-apps/client/live-store.test.ts`, `lib/mobile-apps/list-route.test.ts`, `lib/mobile-apps/list-facts-postgres.test.ts`, `components/mobile-apps/mobile-apps-client.test.tsx`, `components/mobile-apps/app-detail-client.test.tsx`, plus extended stream, detail, ensure-fresh, reviews, worker and review-hook suites.
-- The fixture preview (`npm run preview:mobile-apps`, then `http://127.0.0.1:4173/tests/previews/mobile-apps.html`) now publishes typed changes, drops and restores the connection, injects new reviews, and switches between the list and the detail page. It uses no credentials and no database.
+- The fixture preview (`npm run preview:mobile-apps`, then `http://127.0.0.1:4173/tests/previews/mobile-apps.html`) publishes typed changes, drops and restores the connection, injects new reviews, and switches between the list and the detail page. It uses no credentials and no database.
+- A headless Chrome pass over that preview at 1366 and 390 wide, in both themes, confirmed: the four sections switch and load their own slices, the live pill reads "Live · updated just now" and turns to "Reconnecting · data from 14:46" when the stream drops, the report freshness pill reads "Up to date · official 2026-09 · processed 2026-09", a published change surfaces "Show 3 new reviews" which inserts them without disturbing the loaded page, the trend chart exposes its text alternative, the page never scrolls sideways at 390px, and the console stays clean.
+
+That pass found three defects now fixed: a crushed review title at 390px, a "new reviews" control that did nothing when the count arrived before the rows, and two lines of per-review metadata where one reads better.
 
 Live store credentials, the deployed worker, and a full screen-reader pass were not exercised here. The database checks used a throwaway container, not the project's own database.
 
