@@ -46,14 +46,25 @@ export function RatingTrend({ data, markers = [] }: { data: TrendPoint[]; marker
     );
   }
 
+  const first = data[0];
+  const last = data[data.length - 1];
   return (
-    <div className="h-44">
+    <div>
+      <p className="sr-only">
+        Average rating of written reviews per day, {fmtDay(first.day)} to {fmtDay(last.day)}: starts at {first.avg.toFixed(2)}, ends at {last.avg.toFixed(2)} across {data.reduce((a, d) => a + d.count, 0)} reviews.
+      </p>
+      <table className="sr-only">
+        <caption>Daily average rating</caption>
+        <thead><tr><th scope="col">Day</th><th scope="col">Average</th><th scope="col">Reviews</th></tr></thead>
+        <tbody>{data.slice(-30).map((d) => <tr key={d.day}><td>{fmtDay(d.day)}</td><td>{d.avg.toFixed(2)}</td><td>{d.count}</td></tr>)}</tbody>
+      </table>
+    <div className="h-44" aria-hidden>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 6, right: 6, bottom: 0, left: -22 }}>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
+              <stop offset="0%" stopColor="var(--viz-1)" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="var(--viz-1)" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="var(--border)" strokeOpacity={0.5} />
@@ -91,7 +102,7 @@ export function RatingTrend({ data, markers = [] }: { data: TrendPoint[]; marker
           <Area
             type="monotone"
             dataKey="avg"
-            stroke="var(--chart-1)"
+            stroke="var(--viz-1)"
             strokeWidth={2}
             fill={`url(#${gradientId})`}
             dot={false}
@@ -110,6 +121,7 @@ export function RatingTrend({ data, markers = [] }: { data: TrendPoint[]; marker
           ))}
         </AreaChart>
       </ResponsiveContainer>
+    </div>
     </div>
   );
 }

@@ -33,6 +33,8 @@ const dateLike = z
 const querySchema = z.object({
   store: z.enum(["apple", "google"]).optional(),
   rating: z.coerce.number().int().min(1).max(5).optional(),
+  // Inclusive upper bound, e.g. maxRating=3 for "negative" reviews.
+  maxRating: z.coerce.number().int().min(1).max(5).optional(),
   sort: z.enum(["newest", "oldest", "lowest", "highest"]).default("newest"),
   q: z.string().trim().max(200).optional(),
   // Filter by review submission time. `since` is inclusive, `until` exclusive.
@@ -77,7 +79,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!isUuid(id)) return fail("App not found", 404);
     const parsed = querySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams));
     if (!parsed.success) return fail("Invalid review query.", 422);
-    const { store, rating, sort, q, since, until, fetchedSince, responded, format, limit, offset } = parsed.data;
+    const { store, rating, maxRating, sort, q, since, until, fetchedSince, responded, format, limit, offset } = parsed.data;
     const asOf = new Date().toISOString();
 
     const sql = getSql();
@@ -113,6 +115,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       where r.listing_id = any(${sql.array(listingIds)}::uuid[])
         and (${store ?? null}::text is null or l.store = ${store ?? null})
         and (${rating ?? null}::int is null or r.rating = ${rating ?? null})
+        and (${maxRating ?? null}::int is null or r.rating <= ${maxRating ?? null})
         and (${since ?? null}::timestamptz is null or r.submitted_at >= ${since ?? null}::timestamptz)
         and (${until ?? null}::timestamptz is null or r.submitted_at < ${until ?? null}::timestamptz)
         and (${fetchedSince ?? null}::timestamptz is null or r.fetched_at > ${fetchedSince ?? null}::timestamptz)

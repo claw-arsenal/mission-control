@@ -9,6 +9,7 @@ const server = await createServer({
   resolve: { alias: [
     { find: "@/components/modules/modules-provider", replacement: resolve(root, "tests/previews/platform.tsx") },
     { find: "next/navigation", replacement: resolve(root, "tests/previews/platform.tsx") },
+    { find: "next/dynamic", replacement: resolve(root, "tests/previews/next-dynamic.tsx") },
     { find: "next/link", replacement: resolve(root, "tests/previews/platform.tsx") },
     { find: "@", replacement: root },
   ] },

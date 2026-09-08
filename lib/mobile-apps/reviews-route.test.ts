@@ -78,7 +78,7 @@ describe("reviews route", () => {
     session.mockResolvedValue({ sub: "s", name: "n", email: "u@example.com" });
     moduleEnabled.mockResolvedValue(true);
     vi.mocked(getSql).mockReturnValue(fakeSql() as never);
-    const res = await GET(req("?fetchedSince=2026-09-08T10:00:00.000Z&responded=false"), { params });
+    const res = await GET(req("?fetchedSince=2026-09-08T10:00:00.000Z&responded=false&maxRating=3"), { params });
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(typeof json.asOf).toBe("string");

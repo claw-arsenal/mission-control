@@ -89,7 +89,12 @@ describe("syncApp upsert + dedupe", () => {
     expect(upsert).toContain("rating = excluded.rating");
     expect(upsert).toContain("body = excluded.body");
     expect(upsert).toContain("submitted_at = excluded.submitted_at");
-    expect(upsert).toContain("fetched_at = now()");
+    // fetched_at advances only when the review's visible content changed, so a
+    // routine re-poll never makes unchanged reviews look new to the delta feed.
+    expect(upsert).toMatch(/fetched_at = case/);
+    expect(upsert).toContain("app_reviews.rating is distinct from excluded.rating");
+    expect(upsert).toContain("app_reviews.store_response is distinct from excluded.store_response");
+    expect(upsert).toContain("else app_reviews.fetched_at end");
   });
 
   it("ratingCaptured is false when no rating could be captured", async () => {

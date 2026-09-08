@@ -57,6 +57,8 @@ export type Summary = {
   r1: number; r2: number; r3: number; r4: number; r5: number;
   negative: number;
   responded: number;
+  /** Negative reviews without a developer response. */
+  needs_reply?: number;
   latest_review_at: string | null;
 };
 

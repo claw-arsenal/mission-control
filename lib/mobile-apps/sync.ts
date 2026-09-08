@@ -102,7 +102,15 @@ async function upsertReviews(sql: Sql, listingId: string, reviews: RawReview[]):
             language = excluded.language,
             device = excluded.device,
             raw_json = excluded.raw_json,
-            fetched_at = now()
+            -- fetched_at marks activity: it moves only when the review's visible
+            -- content changed (edit, rating change, developer reply), so a routine
+            -- re-fetch never presents old reviews as new.
+            fetched_at = case
+              when app_reviews.rating is distinct from excluded.rating
+                or app_reviews.title is distinct from excluded.title
+                or app_reviews.body is distinct from excluded.body
+                or app_reviews.store_response is distinct from excluded.store_response
+              then now() else app_reviews.fetched_at end
       returning (xmax = 0) as inserted
     `;
     if ((res as unknown as Array<{ inserted: boolean }>)[0]?.inserted) inserted += 1;

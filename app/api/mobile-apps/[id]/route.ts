@@ -184,6 +184,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
               count(*) filter (where r.rating = 5)::int as r5,
               count(*) filter (where r.rating is not null and r.rating <= ${negativeThreshold})::int as negative,
               count(*) filter (where r.store_response is not null and r.store_response <> '')::int as responded,
+              count(*) filter (where r.rating is not null and r.rating <= ${negativeThreshold} and (r.store_response is null or r.store_response = ''))::int as needs_reply,
               max(r.submitted_at) as latest_review_at
             from app_reviews r
             join mobile_app_listings l on l.id = r.listing_id
